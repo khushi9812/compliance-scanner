@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/dialog";
 import { Logo } from "@/components/Logo";
 import { useAuth } from "@/hooks/use-auth";
+import { LABEL_SAMPLES, sampleById } from "@/lib/label-samples";
+import { makeSyntheticLabel } from "@/lib/synthetic-label";
 import {
   prepareCapture,
   acquireGeotag,
@@ -62,6 +64,7 @@ import {
   MapPin,
   ShieldCheck,
   Gavel,
+  Sparkles,
 } from "lucide-react";
 import {
   Bar,
@@ -99,6 +102,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const processScan = useAction(api.scans.processScan);
   const saveReport = useMutation(api.reports.saveReport);
+  const seedExampleCases = useMutation(api.scans.seedExampleCases);
   const analytics = useQuery(api.scans.analytics);
   const reports = useQuery(api.reports.listReports, { limit: 20 });
 
@@ -149,6 +153,45 @@ export default function Dashboard() {
       setLastScanId(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not read image.");
+    }
+  }
+
+  /** Load an example capture with its calibration preset pre-applied. */
+  async function loadExample(sampleId: string) {
+    const s = sampleById(sampleId);
+    if (!s) return;
+    try {
+      const blob = await (await fetch(makeSyntheticLabel(sampleId))).blob();
+      const p = await prepareCapture(blob, "upload");
+      setPrepared(p);
+      setLastScanId(null);
+      if (s.calibration) {
+        setRealHeightMm(s.calibration.realHeightMm);
+        setBboxPixelHeight(s.calibration.boundingBoxPixelHeight);
+        setCalibrateOn(true);
+      }
+      if (s.sizeOverride) {
+        setSizeValue(String(s.sizeOverride.value));
+        setSizeUnit(s.sizeOverride.unit);
+      }
+      toast.info(`Example loaded: ${s.name}`, {
+        description: s.verdictHint,
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load example.");
+    }
+  }
+
+  async function handleSeed() {
+    try {
+      const res = await seedExampleCases({});
+      if (res.seeded) {
+        toast.success(`Seeded ${res.count} example cases across 4 states.`);
+      } else {
+        toast.info("Example cases already present.");
+      }
+    } catch {
+      toast.error("Could not seed example cases.");
     }
   }
 
@@ -344,6 +387,29 @@ export default function Dashboard() {
                         </p>
                       </div>
                     )}
+                    <div className="border-t pt-3">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">
+                        Load an example capture (calibration prefilled)
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {LABEL_SAMPLES.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            title={s.verdictHint}
+                            className="rounded-md border bg-card px-2.5 py-2 text-left text-xs transition hover:border-primary hover:bg-accent"
+                            onClick={() => void loadExample(s.id)}
+                          >
+                            <span className="block font-medium">
+                              {s.emoji} {s.name}
+                            </span>
+                            <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
+                              {s.verdictHint}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
 
@@ -641,6 +707,14 @@ export default function Dashboard() {
                         onChange={(e) => setSearch(e.target.value)}
                       />
                     </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleSeed()}
+                      title="Fill the repository with six example cases across four states"
+                    >
+                      <Sparkles className="size-4" /> Load example cases
+                    </Button>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
                       <SelectTrigger className="w-36">
                         <SelectValue />
@@ -771,6 +845,25 @@ export default function Dashboard() {
               </Card>
             ) : (
               <div className="space-y-5">
+                {analytics.total === 0 && (
+                  <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
+                      <Sparkles className="size-6 text-primary" />
+                      <div>
+                        <p className="text-sm font-medium">
+                          No data to chart yet
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Load six example cases (4 states, mixed verdicts) to
+                          see every chart in action.
+                        </p>
+                      </div>
+                      <Button size="sm" onClick={() => void handleSeed()}>
+                        <Sparkles className="size-4" /> Load example cases
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <StatCard
                     icon={<Database className="size-4" />}

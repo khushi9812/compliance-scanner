@@ -95,7 +95,13 @@ export default function Scan() {
     };
   }, [cameraOn]);
 
-  async function runScan(prepared: Awaited<ReturnType<typeof prepareCapture>>) {
+  async function runScan(
+    prepared: Awaited<ReturnType<typeof prepareCapture>>,
+    example?: {
+      layoutIndex: number;
+      sizeOverride?: { value: number; unit: string };
+    },
+  ) {
     setBusy("scanning");
     try {
       const geo = await acquireGeotag();
@@ -107,6 +113,14 @@ export default function Scan() {
         source: prepared.source,
         geolocation:
           geo.lat != null ? { lat: geo.lat, lng: geo.lng } : undefined,
+        ...(example
+          ? {
+              layoutIndex: example.layoutIndex,
+              packageSizeOverride: example.sizeOverride,
+              state: "Karnataka",
+              district: "Bengaluru Urban",
+            }
+          : {}),
       });
       setResult({
         scanId,
@@ -192,9 +206,12 @@ export default function Scan() {
     if (!s) return;
     setBusy("preparing");
     try {
-      const blob = await (await fetch(makeSyntheticLabel(s))).blob();
+      const blob = await (await fetch(makeSyntheticLabel(sampleId))).blob();
       const prepared = await prepareCapture(blob, "upload");
-      await runScan(prepared);
+      await runScan(prepared, {
+        layoutIndex: s.layoutIndex,
+        sizeOverride: s.sizeOverride,
+      });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Specimen failed.");
       setBusy(null);
@@ -392,20 +409,21 @@ export default function Scan() {
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <FlaskConical className="size-3.5" /> OR SCAN A SPECIMEN LABEL
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {LABEL_SAMPLES.map((s) => (
                     <button
                       key={s.id}
-                      className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-left text-xs transition hover:border-primary hover:bg-accent"
+                      className="rounded-md border bg-card px-3 py-2 text-left text-xs transition hover:border-primary hover:bg-accent"
                       onClick={() => void trySample(s.id)}
                       disabled={busy != null}
+                      title={s.verdictHint}
                     >
-                      <span className="text-lg">{s.emoji}</span>
-                      <span>
-                        <span className="block font-medium">{s.name}</span>
-                        <span className="text-muted-foreground">
-                          {s.category}
-                        </span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-lg">{s.emoji}</span>
+                        <span className="font-medium">{s.name}</span>
+                      </span>
+                      <span className="mt-1 block text-muted-foreground">
+                        {s.verdictHint}
                       </span>
                     </button>
                   ))}

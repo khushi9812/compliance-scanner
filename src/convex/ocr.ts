@@ -72,9 +72,10 @@ export function segmentRegions(
   imageWidth: number,
   imageHeight: number,
   imageHash: string,
+  layoutIndex?: number,
 ): SegmentRegion[] {
   const seedBase = hashSeed(imageHash);
-  const layout = pickLayout(seedBase);
+  const layout = pickLayout(seedBase, layoutIndex);
   return layout.map((r, i) => {
     const seed = seedBase + i * 17;
     const conf = 0.6 + (seed % 39) / 100; // 0.60 .. 0.98
@@ -112,8 +113,11 @@ interface LayoutRow {
   yf: number;
 }
 
-/** Deterministic label layouts representing common packaged-commodity panels. */
-function pickLayout(seed: number): LayoutRow[] {
+/**
+ * Deterministic label layouts representing common packaged-commodity panels.
+ * `layoutIndex` pins a specific panel (used by the built-in example labels).
+ */
+function pickLayout(seed: number, layoutIndex?: number): LayoutRow[] {
   const layouts: LayoutRow[][] = [
     [
       { text: "Crunchy Muesli 500g", wf: 0.5, hf: 0.07, xf: 0.08, yf: 0.05 },
@@ -149,7 +153,7 @@ function pickLayout(seed: number): LayoutRow[] {
       { text: "Consumer Care: +91 9876543210", wf: 0.44, hf: 0.05, xf: 0.09, yf: 0.6 },
     ],
   ];
-  return layouts[seed % layouts.length];
+  return layouts[layoutIndex != null ? layoutIndex % layouts.length : seed % layouts.length];
 }
 
 /**
@@ -269,12 +273,13 @@ export function runOcrPipeline(
   imageWidth: number,
   imageHeight: number,
   imageHash: string,
+  layoutIndex?: number,
 ): {
   regions: ClassifiedRegion[];
   meta: OcrEngineMeta;
 } {
   const start = Date.now();
-  const segments = segmentRegions(imageWidth, imageHeight, imageHash);
+  const segments = segmentRegions(imageWidth, imageHeight, imageHash, layoutIndex);
   const regions = classifyRegions(segments);
   // Simulated fallback chain: PaddleOCR primary, EasyOCR fallback when the
   // hash-parity dice says so — mirrors dual-engine deployments.

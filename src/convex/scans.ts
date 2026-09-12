@@ -60,6 +60,11 @@ export const processScan = action({
     imageUrl: v.optional(v.string()),
     productName: v.optional(v.string()),
     brand: v.optional(v.string()),
+    // Pin a known example label layout (see LABEL_SAMPLES layoutIndex).
+    layoutIndex: v.optional(v.number()),
+    // Example location tags so the heatmap/demo data reads like field data.
+    state: v.optional(v.string()),
+    district: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<string> => {
     const userId = await getAuthUserId(ctx);
@@ -69,6 +74,7 @@ export const processScan = action({
       args.imageWidth,
       args.imageHeight,
       args.imageHash,
+      args.layoutIndex,
     );
 
     // ---- 2. Extraction summary -------------------------------------------
@@ -145,7 +151,16 @@ export const processScan = action({
     await ctx.runMutation(api.scans.insertScan, {
       scanId,
       timestamp: now,
-      geolocation: args.geolocation,
+      geolocation: args.geolocation
+        ? {
+            lat: args.geolocation.lat,
+            lng: args.geolocation.lng,
+            state: args.state ?? args.geolocation.state,
+            district: args.district ?? args.geolocation.district,
+          }
+        : args.state || args.district
+          ? { state: args.state, district: args.district }
+          : undefined,
       imageHash: args.imageHash,
       imageWidth: args.imageWidth,
       imageHeight: args.imageHeight,
@@ -465,5 +480,172 @@ export const analytics = query({
       byState,
       violationTypes,
     };
+  },
+});
+
+/**
+ * Seed example cases so the repository, analytics, heatmap, and notice
+ * generator can be explored with data immediately. Uses the four example
+ * label panels at varied locations. Idempotent: skips if scans exist.
+ */
+export const seedExampleCases = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const existing = await ctx.db.query("scans").first();
+    if (existing) return { seeded: false, reason: "scans exist" } as const;
+
+    const plan: Array<{
+      layoutIndex: number;
+      brand: string;
+      state: string;
+      district: string;
+      calibration: { realHeightMm: number; boundingBoxPixelHeight: number };
+      size: { value: number; unit: string };
+      source: "upload" | "camera" | "url" | "offline_sync";
+    }> = [
+      {
+        layoutIndex: 0,
+        brand: "Sunrise Foods Pvt. Ltd.",
+        state: "Karnataka",
+        district: "Bengaluru Urban",
+        calibration: { realHeightMm: 240, boundingBoxPixelHeight: 1200 },
+        size: { value: 500, unit: "g" },
+        source: "upload",
+      },
+      {
+        layoutIndex: 1,
+        brand: "Greenleaf Industries",
+        state: "Maharashtra",
+        district: "Pune",
+        calibration: { realHeightMm: 190, boundingBoxPixelHeight: 950 },
+        size: { value: 340, unit: "ml" },
+        source: "camera",
+      },
+      {
+        layoutIndex: 2,
+        brand: "Deccan Snacks Pvt Ltd",
+        state: "Telangana",
+        district: "Hyderabad",
+        calibration: { realHeightMm: 260, boundingBoxPixelHeight: 1040 },
+        size: { value: 80, unit: "g" },
+        source: "upload",
+      },
+      {
+        layoutIndex: 3,
+        brand: "AquaPure Beverages Ltd.",
+        state: "Tamil Nadu",
+        district: "Chennai",
+        calibration: { realHeightMm: 300, boundingBoxPixelHeight: 1500 },
+        size: { value: 1, unit: "l" },
+        source: "offline_sync",
+      },
+      {
+        layoutIndex: 1,
+        brand: "Greenleaf Industries",
+        state: "Karnataka",
+        district: "Mysuru",
+        calibration: { realHeightMm: 190, boundingBoxPixelHeight: 950 },
+        size: { value: 340, unit: "ml" },
+        source: "camera",
+      },
+      {
+        layoutIndex: 3,
+        brand: "AquaPure Beverages Ltd.",
+        state: "Tamil Nadu",
+        district: "Coimbatore",
+        calibration: { realHeightMm: 300, boundingBoxPixelHeight: 1500 },
+        size: { value: 1, unit: "l" },
+        source: "offline_sync",
+      },
+    ];
+
+    let i = 0;
+    for (const p of plan) {
+      const imageHash = `seed${p.layoutIndex}${i}`.padEnd(24, "0");
+      const { regions, meta } = runOcrPipeline(
+        640,
+        880,
+        imageHash,
+        p.layoutIndex,
+      );
+      const matches = acceptedMatches(regions);
+      const fields: ExtractionSummary["fields"] = {};
+      for (const key of Object.keys(matches) as FieldKey[]) {
+        const m = matches[key];
+        if (!m) continue;
+        const region = regions.find((r) => r.regionId === m.regionId);
+        if (!region) continue;
+        fields[key] = {
+          value: m.value,
+          confidence: m.confidence,
+          regionId: m.regionId,
+          boundingBox: region.boundingBox,
+        };
+      }
+      const extraction: ExtractionSummary = { fields, rawRegions: regions.length };
+      const declaredRegions = Object.entries(fields).map(([field, entry]) => ({
+        field: field as FieldKey,
+        pixelHeight: entry.boundingBox.h,
+      }));
+      const result = validate(
+        extraction,
+        p.calibration,
+        declaredRegions,
+        p.size.value,
+        p.size.unit,
+      );
+      const now = Date.now() - i * 36e5 * 9; // spread over recent days
+      const scanId = makeScanId(imageHash, now);
+      await ctx.db.insert("scans", {
+        scanId,
+        timestamp: now,
+        geolocation: { state: p.state, district: p.district },
+        imageHash,
+        imageWidth: 640,
+        imageHeight: 880,
+        portalRole: i % 3 === 2 ? "consumer" : "officer",
+        source: p.source,
+        productName: fields.manufacturer?.value,
+        brand: p.brand,
+        packageSizeValue: p.size.value,
+        packageSizeUnit: p.size.unit as "g" | "kg" | "ml" | "l",
+        calibration: {
+          realHeightMm: p.calibration.realHeightMm,
+          boundingBoxPixelHeight: p.calibration.boundingBoxPixelHeight,
+          mmPerPixel:
+            Math.round((p.calibration.realHeightMm / p.calibration.boundingBoxPixelHeight) * 10000) /
+            10000,
+        },
+        regions: regions.map((r) => ({
+          regionId: r.regionId,
+          rawText: r.rawText,
+          confidence: r.confidence,
+          boundingBox: r.boundingBox,
+          match: r.match
+            ? {
+                field: r.match.field,
+                value: r.match.value,
+                matchedPattern: r.match.matchedPattern,
+                patternIndex: r.match.patternIndex,
+              }
+            : undefined,
+          classification: r.classification,
+        })),
+        ocrMeta: meta,
+        extraction: { fields },
+        result: {
+          isCompliant: result.isCompliant,
+          complianceScore: result.complianceScore,
+          missingFields: result.missingFields,
+          formattingViolations: result.formattingViolations,
+          fontSizeViolations: result.fontSizeViolations,
+          appliedRuleVersion: result.appliedRuleVersion,
+        },
+        isCompliant: result.isCompliant,
+        createdAt: now,
+      });
+      i += 1;
+    }
+    return { seeded: true, count: plan.length } as const;
   },
 });

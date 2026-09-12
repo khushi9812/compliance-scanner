@@ -352,9 +352,14 @@ export default function Landing() {
             </div>
             <div className="flex flex-wrap gap-2">
               {LABEL_SAMPLES.map((s) => (
-                <span key={s.id} className="spec-tag">
+                <Link
+                  key={s.id}
+                  to="/scan"
+                  className="spec-tag transition hover:border-primary hover:text-primary"
+                  title={`Try this example: ${s.verdictHint}`}
+                >
                   {s.emoji} {s.name}
-                </span>
+                </Link>
               ))}
             </div>
           </div>
