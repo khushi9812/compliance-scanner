@@ -914,7 +914,7 @@ export default function Dashboard() {
                               key={s.state}
                               className="flex items-center justify-between rounded border px-3 py-1.5 text-sm"
                               style={{
-                                background: `color-mix(in oklab, var(--chart-2) ${Math.round(ratio * 55)}%, transparent)`,
+                                background: `rgba(180, 83, 9, ${Math.min(0.6, ratio * 0.75 + 0.06).toFixed(2)})`,
                               }}
                             >
                               <span className="flex items-center gap-2">
