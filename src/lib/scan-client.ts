@@ -129,6 +129,15 @@ export interface QueuedScan {
     productName?: string;
     brand?: string;
     packageSizeOverride?: { value: number; unit: string };
+    // Pinned example layout, if the queued capture is a specimen.
+    layoutIndex?: number;
+    // Real OCR output captured while offline; classified on sync.
+    ocrRegions?: Array<{
+      rawText: string;
+      confidence: number;
+      boundingBox: { x: number; y: number; w: number; h: number };
+    }>;
+    ocrMeta?: { primary: string; usedFallback: boolean; regionsCount: number; durationMs: number };
   };
   localPreview: string;
 }
@@ -176,6 +185,13 @@ export async function syncOfflineQueue(
       productName?: string;
       brand?: string;
       packageSizeOverride?: { value: number; unit: string };
+      layoutIndex?: number;
+      ocrRegions?: Array<{
+        rawText: string;
+        confidence: number;
+        boundingBox: { x: number; y: number; w: number; h: number };
+      }>;
+      ocrMeta?: { primary: string; usedFallback: boolean; regionsCount: number; durationMs: number };
     },
   ) => Promise<string>,
 ): Promise<{ synced: number; failed: number }> {

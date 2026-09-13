@@ -16,7 +16,14 @@ import {
   fontSizeViolation,
   validationResult,
 } from "./shared";
-import { runOcrPipeline, acceptedMatches } from "./ocr";
+import {
+  runOcrPipeline,
+  acceptedMatches,
+  classifyClientRegions,
+  type ClassifiedRegion,
+  type OcrEngineMeta,
+  type ClientRegionInput,
+} from "./ocr";
 import { mmPerPixel } from "./calibration";
 import { validate, type ExtractionSummary } from "./ruleEngine";
 
@@ -62,6 +69,22 @@ export const processScan = action({
     brand: v.optional(v.string()),
     // Pin a known example label layout (see LABEL_SAMPLES layoutIndex).
     layoutIndex: v.optional(v.number()),
+    // Real OCR output from the browser (Tesseract.js line regions).
+    ocrRegions: v.optional(
+      v.array(
+        v.object({
+          rawText: v.string(),
+          confidence: v.number(),
+          boundingBox: v.object({
+            x: v.number(),
+            y: v.number(),
+            w: v.number(),
+            h: v.number(),
+          }),
+        }),
+      ),
+    ),
+    ocrMeta: v.optional(ocrEngineMeta),
     // Example location tags so the heatmap/demo data reads like field data.
     state: v.optional(v.string()),
     district: v.optional(v.string()),
@@ -70,12 +93,43 @@ export const processScan = action({
     const userId = await getAuthUserId(ctx);
 
     // ---- 1. OCR pipeline --------------------------------------------------
-    const { regions, meta } = runOcrPipeline(
-      args.imageWidth,
-      args.imageHeight,
-      args.imageHash,
-      args.layoutIndex,
-    );
+    // Two paths: real text recognized in the browser (Tesseract.js) is
+    // classified here against Rule 6; when no regions are provided (or the
+    // capture found nothing readable), fall back to the deterministic
+    // example-layout pipeline so specimen scans keep working.
+    let regions: ClassifiedRegion[] = [];
+    let meta: OcrEngineMeta = {
+      primary: "tesseract.js",
+      usedFallback: false,
+      regionsCount: 0,
+      durationMs: 0,
+    };
+    if (args.ocrRegions && args.ocrRegions.length > 0) {
+      regions = classifyClientRegions(args.ocrRegions);
+      meta = args.ocrMeta ?? {
+        primary: "tesseract.js",
+        usedFallback: false,
+        regionsCount: regions.length,
+        durationMs: 0,
+      };
+    } else if (args.layoutIndex != null) {
+      const out = runOcrPipeline(
+        args.imageWidth,
+        args.imageHeight,
+        args.imageHash,
+        args.layoutIndex,
+      );
+      regions = out.regions;
+      meta = out.meta;
+    } else {
+      regions = [];
+      meta = {
+        primary: "tesseract.js",
+        usedFallback: false,
+        regionsCount: 0,
+        durationMs: 0,
+      };
+    }
 
     // ---- 2. Extraction summary -------------------------------------------
     const matches = acceptedMatches(regions);

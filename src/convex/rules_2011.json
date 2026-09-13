@@ -12,6 +12,7 @@
   },
   "ocr": {
     "minConfidence": 0.55,
+    "clientMinConfidence": 0.45,
     "languages": ["en"],
     "patterns": {
       "mrp": [

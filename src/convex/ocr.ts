@@ -309,3 +309,67 @@ export function acceptedMatches(
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Real OCR input (client-side Tesseract.js) — classification only.
+// ---------------------------------------------------------------------------
+
+/** Shape the browser sends for each detected line after real OCR. */
+export interface ClientRegionInput {
+  rawText: string;
+  confidence: number;
+  boundingBox: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Classify regions that were recognized by real OCR in the browser.
+ * Same Rule-6 patterns and duplicate resolution as `classifyRegions`, but no
+ * synthesis: the text is whatever was actually printed on the label.
+ */
+export function classifyClientRegions(
+  inputs: ClientRegionInput[],
+): ClassifiedRegion[] {
+  const segments: SegmentRegion[] = inputs.map((r, i) => ({
+    regionId: i,
+    rawText: r.rawText,
+    confidence: r.confidence,
+    boundingBox: r.boundingBox,
+  }));
+
+  const minConf = rules.ocr.clientMinConfidence ?? MIN_CONF;
+  const claimed = new Map<number, MatchInfo>();
+  const seenFields = new Set<FieldKey>();
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx];
+    if (seg.confidence < minConf) continue;
+    for (const field of FIELD_PRIORITY) {
+      const patterns = PATTERNS[field] ?? [];
+      for (let pi = 0; pi < patterns.length; pi++) {
+        const m = seg.rawText.match(patternToRegex(patterns[pi]));
+        if (m) {
+          if (seenFields.has(field)) break; // first (highest-priority) line wins the field
+          claimed.set(idx, {
+            field,
+            value: normalizeValue(field, m[0]),
+            matchedPattern: patterns[pi],
+            patternIndex: pi,
+          });
+          seenFields.add(field);
+          break;
+        }
+      }
+    }
+  }
+
+  return segments.map((seg, idx) => {
+    if (seg.confidence < minConf) {
+      return { ...seg, classification: "rejected_low_confidence" as const };
+    }
+    const match = claimed.get(idx);
+    if (!match) {
+      return { ...seg, classification: "rejected_unmatched" as const };
+    }
+    return { ...seg, match, classification: "accepted" as const };
+  });
+}

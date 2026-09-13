@@ -31,6 +31,7 @@ import {
   FIELD_LABELS,
   missingFieldSentence,
 } from "@/lib/scan-client";
+import { runClientOcr, type OcrRunResult } from "@/lib/ocr-client";
 import { grievanceText, nchUrl } from "@/lib/notice-doc";
 import { LABEL_SAMPLES } from "@/lib/label-samples";
 import { makeSyntheticLabel } from "@/lib/synthetic-label";
@@ -71,6 +72,10 @@ export default function Scan() {
 
   const [tab, setTab] = useState<"upload" | "camera" | "url">("upload");
   const [busy, setBusy] = useState<string | null>(null);
+  const [ocrStage, setOcrStage] = useState<{
+    pct: number;
+    stage: string;
+  } | null>(null);
   const [result, setResult] = useState<ConsumerResult | null>(null);
   const [grievanceOpen, setGrievanceOpen] = useState(false);
   const urlInput = useRef<HTMLInputElement>(null);
@@ -97,6 +102,7 @@ export default function Scan() {
 
   async function runScan(
     prepared: Awaited<ReturnType<typeof prepareCapture>>,
+    ocr?: OcrRunResult,
     example?: {
       layoutIndex: number;
       sizeOverride?: { value: number; unit: string };
@@ -113,6 +119,8 @@ export default function Scan() {
         source: prepared.source,
         geolocation:
           geo.lat != null ? { lat: geo.lat, lng: geo.lng } : undefined,
+        ocrRegions: ocr && ocr.regions.length > 0 ? ocr.regions : undefined,
+        ocrMeta: ocr?.meta,
         ...(example
           ? {
               layoutIndex: example.layoutIndex,
@@ -142,8 +150,13 @@ export default function Scan() {
     setBusy("preparing");
     try {
       const prepared = await prepareCapture(f, "upload");
-      await runScan(prepared);
+      const ocr = await runClientOcr(prepared.dataUrl, (pct, stage) =>
+        setOcrStage({ pct, stage }),
+      );
+      setOcrStage(null);
+      await runScan(prepared, ocr);
     } catch (e) {
+      setOcrStage(null);
       toast.error(e instanceof Error ? e.message : "Could not read image.");
       setBusy(null);
     }
@@ -158,8 +171,13 @@ export default function Scan() {
     setBusy("preparing");
     try {
       const prepared = await prepareCapture(url, "url");
-      await runScan(prepared);
+      const ocr = await runClientOcr(prepared.dataUrl, (pct, stage) =>
+        setOcrStage({ pct, stage }),
+      );
+      setOcrStage(null);
+      await runScan(prepared, ocr);
     } catch (e) {
+      setOcrStage(null);
       toast.error(
         e instanceof Error
           ? e.message
@@ -198,7 +216,17 @@ export default function Scan() {
     stopCamera();
     setBusy("preparing");
     const prepared = await prepareCapture(blob, "camera");
-    await runScan(prepared);
+    try {
+      const ocr = await runClientOcr(prepared.dataUrl, (pct, stage) =>
+        setOcrStage({ pct, stage }),
+      );
+      setOcrStage(null);
+      await runScan(prepared, ocr);
+    } catch (e) {
+      setOcrStage(null);
+      toast.error(e instanceof Error ? e.message : "Scan failed.");
+      setBusy(null);
+    }
   }
 
   async function trySample(sampleId: string) {
@@ -208,7 +236,9 @@ export default function Scan() {
     try {
       const blob = await (await fetch(makeSyntheticLabel(sampleId))).blob();
       const prepared = await prepareCapture(blob, "upload");
-      await runScan(prepared, {
+      // Specimens use the pinned backend layout (no live OCR) so the demo
+      // stays deterministic and offline-safe.
+      await runScan(prepared, undefined, {
         layoutIndex: s.layoutIndex,
         sizeOverride: s.sizeOverride,
       });
@@ -439,10 +469,20 @@ export default function Scan() {
                 <CardContent className="flex h-full min-h-80 flex-col items-center justify-center gap-3 text-muted-foreground">
                   <Loader2 className="size-8 animate-spin text-primary" />
                   <p className="text-sm">
-                    {busy === "preparing"
-                      ? "Hashing & normalizing capture…"
-                      : "Running OCR → calibration → Rule 6 validation…"}
+                    {ocrStage
+                      ? `${ocrStage.stage}… ${ocrStage.pct}%`
+                      : busy === "preparing"
+                        ? "Hashing & normalizing capture…"
+                        : "Running calibration → Rule 6 validation…"}
                   </p>
+                  {ocrStage && (
+                    <div className="h-1.5 w-48 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all"
+                        style={{ width: `${ocrStage.pct}%` }}
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ) : displayed ? (

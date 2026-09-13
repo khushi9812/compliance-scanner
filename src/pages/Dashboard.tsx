@@ -46,6 +46,7 @@ import {
   syncOfflineQueue,
   FIELD_LABELS,
 } from "@/lib/scan-client";
+import { runClientOcr, type OcrRunResult } from "@/lib/ocr-client";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -113,6 +114,12 @@ export default function Dashboard() {
 
   // Scanner state
   const [prepared, setPrepared] = useState<Prepared | null>(null);
+  const [ocrResult, setOcrResult] = useState<OcrRunResult | null>(null);
+  const [exampleLayout, setExampleLayout] = useState<number | null>(null);
+  const [ocrStage, setOcrStage] = useState<{
+    pct: number;
+    stage: string;
+  } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [lastScanId, setLastScanId] = useState<string | null>(null);
   const [realHeightMm, setRealHeightMm] = useState(220);
@@ -151,7 +158,18 @@ export default function Dashboard() {
       const p = await prepareCapture(f, "upload");
       setPrepared(p);
       setLastScanId(null);
+      setExampleLayout(null);
+      setOcrResult(null);
+      // Read the label immediately so the text is ready even if the
+      // inspection is queued offline.
+      setOcrStage({ pct: 0, stage: "Starting OCR" });
+      const ocr = await runClientOcr(p.dataUrl, (pct, stage) =>
+        setOcrStage({ pct, stage }),
+      );
+      setOcrResult(ocr);
+      setOcrStage(null);
     } catch (e) {
+      setOcrStage(null);
       toast.error(e instanceof Error ? e.message : "Could not read image.");
     }
   }
@@ -165,6 +183,10 @@ export default function Dashboard() {
       const p = await prepareCapture(blob, "upload");
       setPrepared(p);
       setLastScanId(null);
+      // Specimens run on the pinned backend layout — no live OCR needed.
+      setOcrResult(null);
+      setOcrStage(null);
+      setExampleLayout(s.layoutIndex);
       if (s.calibration) {
         setRealHeightMm(s.calibration.realHeightMm);
         setBboxPixelHeight(s.calibration.boundingBoxPixelHeight);
@@ -215,6 +237,12 @@ export default function Dashboard() {
         sizeValue && !Number.isNaN(parseFloat(sizeValue))
           ? { value: parseFloat(sizeValue), unit: sizeUnit }
           : undefined,
+      ocrRegions:
+        ocrResult && ocrResult.regions.length > 0
+          ? ocrResult.regions
+          : undefined,
+      ocrMeta: ocrResult?.meta,
+      layoutIndex: exampleLayout ?? undefined,
     };
 
     if (offlineMode) {
@@ -386,6 +414,29 @@ export default function Dashboard() {
                           SHA-256 {prepared.imageHash.slice(0, 32)}…
                         </p>
                       </div>
+                    )}
+                    {ocrStage && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">
+                          <Loader2 className="mr-1 inline size-3 animate-spin" />
+                          {ocrStage.stage}… {ocrStage.pct}%
+                        </p>
+                        <div className="h-1 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${ocrStage.pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {prepared && !ocrStage && (
+                      <p className="text-xs text-muted-foreground">
+                        {ocrResult
+                          ? `Label read: ${ocrResult.regions.length} text region(s) recognized."
+                          : exampleLayout != null
+                            ? "Specimen capture — pinned example layout will be used."
+                            : ""}
+                      </p>
                     )}
                     <div className="border-t pt-3">
                       <p className="mb-2 text-xs font-medium text-muted-foreground">
@@ -668,12 +719,12 @@ export default function Dashboard() {
                         disabled={!lastScan || (result?.isCompliant ?? true)}
                       >
                         <Gavel className="size-4" /> Generate legal notice
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
+                      </Button>                      <Button variant="outline" onClick={() => {
                           setPrepared(null);
                           setLastScanId(null);
+                          setOcrResult(null);
+                          setOcrStage(null);
+                          setExampleLayout(null);
                         }}
                       >
                         <ScanLine className="size-4" /> New inspection
