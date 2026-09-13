@@ -79,7 +79,7 @@ export function noticeHtml(draft: NoticeDraft): string {
     <tr><td>Scan Reference</td><td>${esc(draft.scanId)}</td></tr>
     <tr><td>To</td><td>${esc(draft.addressee)}</td></tr>
     <tr><td>Inspecting Officer</td><td>${esc(draft.officerName)}</td></tr>
-    <tr><td>Rule Evaluation</td><td>${esc(tally)} (ruleset ${esc(draft.ruleVersion)})</td></tr>
+    <tr><td>Rule Evaluation</td><td>${esc(tally)} (ruleset ${esc(draft.ruleVersion)}, KB ${esc(draft.kbVersion ?? "")})</td></tr>
   </table>
 
   <p><b>SUBJECT:</b> ${esc(draft.subject)}</p>

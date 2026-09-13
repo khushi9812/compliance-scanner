@@ -9,6 +9,7 @@ import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { REQUIREMENTS } from "./productRules";
 import type { EngineResult } from "./ruleEngine";
+import { KB_VERSION } from "./rulesKnowledgeBase";
 
 export interface NoticeViolation {
   clause: string;
@@ -41,12 +42,17 @@ export interface NoticeDraft {
   failCount: number;
   reviewCount: number;
   ruleVersion: string;
+  kbVersion: string;
 }
 
-/** Human requirement text for a field key (from the curated knowledge base). */
-function requirementTextFor(fieldKey: string): string {
+/**
+ * The requirement text of the cited version. The engine result already carries
+ * the KB's verbatim requirement text per row; REQUIREMENTS is the fallback.
+ */
+function requirementTextFor(requirementId: string, onResult?: string): string {
   return (
-    REQUIREMENTS.find((r) => r.fieldKey === fieldKey)?.requirementText ??
+    onResult ??
+    REQUIREMENTS.find((r) => r.id === requirementId)?.requirementText ??
     "Mandatory declaration per Rule 6(1), Legal Metrology (PC) Rules, 2011"
   );
 }
@@ -74,7 +80,7 @@ export const buildNotice = query({
         clause: r.ruleCited,
         requirementId: r.requirementId,
         observed: [r.detected ?? "—", r.reason ?? ""].filter(Boolean).join(" — "),
-        required: requirementTextFor(r.requirementId),
+        required: requirementTextFor(r.requirementId, r.requirement),
         penaltyNote:
           "Non-declaration / incorrect declaration attracts penalties under the Legal Metrology Act, 2009 §36.",
       }));
@@ -92,7 +98,7 @@ export const buildNotice = query({
         : "The Manufacturer / Packer / Importer (per panel declaration)",
       body: [
         `Whereas an inspection of the packaged commodity bearing scan reference ${scanRef} was carried out under the Legal Metrology Act, 2009 and the Legal Metrology (Packaged Commodities) Rules, 2011;`,
-        `And whereas the applicable declarations were verified with an evidence-anchored rule evaluation — of ${result?.applicableCount ?? 0} applicable requirements, ${result?.passCount ?? 0} passed, ${result?.failCount ?? 0} failed and ${result?.reviewCount ?? 0} could not be reliably determined from the captured image;`,
+        `And whereas the applicable declarations were verified with an evidence-anchored rule evaluation against rules knowledge base version ${result?.kbVersion ?? KB_VERSION} — of ${result?.applicableCount ?? 0} applicable requirements, ${result?.passCount ?? 0} passed, ${result?.failCount ?? 0} failed and ${result?.reviewCount ?? 0} could not be reliably determined from the captured image;`,
         "And whereas you are hereby directed to show cause, within 15 days of receipt of this notice, why action should not be initiated against you for the violations listed below;",
         "Take notice that failure to respond within the said period will be construed as non-contestation and proceedings may proceed ex parte.",
       ],
@@ -108,7 +114,8 @@ export const buildNotice = query({
       passCount: result?.passCount ?? 0,
       failCount: result?.failCount ?? 0,
       reviewCount: result?.reviewCount ?? 0,
-      ruleVersion: result?.appliedRuleVersion ?? "lm2011.vision.2.0",
+      ruleVersion: result?.appliedRuleVersion ?? `lm2011-pc.${KB_VERSION}`,
+      kbVersion: result?.kbVersion ?? KB_VERSION,
     };
     return draft;
   },

@@ -118,6 +118,7 @@ export default function Notice() {
               </Badge>
               <span className="text-xs text-muted-foreground">
                 ruleset {draft.ruleVersion}
+                {draft.kbVersion ? ` · KB ${draft.kbVersion}` : ""}
               </span>
             </CardContent>
           </Card>

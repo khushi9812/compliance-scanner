@@ -1,22 +1,27 @@
-// Rule Engine v2 — AI-cross-verification Legal Metrology evaluator.
+// Rule Engine v3 — versioned-knowledge-base evaluator.
 //
-// Inputs (three sources):
-//   1. VisionAnalysis   — what the AI understood from the package image.
-//   2. DatabaseLookup   — optional GTIN/barcode product-database result.
-//   3. CalibrationInput — optional physical calibration (font-height slabs).
+// Pipeline: VisionAnalysis + DatabaseLookup + Calibration
+//   → applicability determination (KB scope + exceptions registry)
+//   → per-requirement validation (KB record + deterministic validators)
+//   → verdict roll-up
 //
-// Output: a rule-by-rule RequirementResult[] plus an overall decision.
-// Decision logic (uncertainty-preserving):
-//   any mandatory FAIL  → NON-COMPLIANT (FAIL)
-//   else any REVIEW     → REVIEW
-//   else                → COMPLIANT (PASS)
+// Verdict rules (from the product brief, enforced here):
+//   PASS   = clearly compliant on visible evidence
+//   FAIL   = clearly non-compliant — the value WAS read and is wrong
+//   REVIEW = insufficient evidence / uncertainty (unreadable, hidden, unclear,
+//            unmeasurable, conflicting). An unreadable declaration is NEVER a
+//            FAIL.
+//
+// Nothing legal is invented at runtime: every requirement, citation, exception
+// and version stamp is looked up from rulesKnowledgeBase.ts.
 
 import {
   REQUIREMENTS,
-  applicableRequirements,
+  validateField,
   crossCheck,
   fieldFor,
   gtinChecksumValid,
+  requirementScopeLabel,
   type VisionAnalysis,
   type DatabaseLookup,
   type RequirementResult,
@@ -24,6 +29,15 @@ import {
   type MismatchReport,
   type RequirementDef,
 } from "./productRules";
+import {
+  EXCEPTIONS,
+  KB_VERSION,
+  KB_SOURCES,
+  AMENDMENTS,
+  RULE_RECORDS,
+  scopeLabel,
+  type ExceptionRule,
+} from "./rulesKnowledgeBase";
 import {
   resolveSlab,
   type CalibrationInput,
@@ -64,144 +78,322 @@ export interface EngineResult {
   applicability: Applicability[];
   crossCheck: CrossCheckSummary;
   fontChecks: FontCheckSummary;
+  /** Exception records that matched this scan (Rule 26 etc.). */
+  exceptionsApplied: Array<{
+    id: string;
+    name: string;
+    ruleCited: string;
+    description: string;
+    amendmentId: string;
+  }>;
+  /** Requirements outside label scope (listed for officer context). */
+  outOfScopeRequirements: Array<{
+    id: string;
+    title: string;
+    ruleCited: string;
+    applicability: string;
+  }>;
   passCount: number;
   failCount: number;
   reviewCount: number;
   applicableCount: number;
+  /** KB + amendment provenance — surfaced verbatim on the report. */
   appliedRuleVersion: string;
+  kbVersion: string;
+  kbSources: string;
   /** Plain-language one-liner for the consumer card. */
   summarySentence: string;
 }
 
-export const RULES_VERSION = "lm2011.vision.2.0";
+export const RULES_VERSION = `lm2011-pc.${KB_VERSION}`;
 
-function labelForFieldKey(key: string): string {
-  return REQUIREMENTS.find((r) => r.fieldKey === key)?.title ?? key;
+// ---------------------------------------------------------------------------
+// Applicability: KB scope + package context + exceptions
+// ---------------------------------------------------------------------------
+
+function isImported(a: VisionAnalysis): boolean {
+  if (a.importedPackage === true) return true;
+  const origin = (a.countryOfOrigin ?? "").toLowerCase();
+  return origin.length > 0 && !origin.includes("india");
 }
 
-/** Evaluate a single requirement definition against the analysis. */
+function netQtyAtMost(a: VisionAnalysis, value: number, unit: "g" | "ml"): boolean {
+  const nq = a.netQuantity ?? "";
+  const m = nq.match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l|cl)\b/i);
+  if (!m) return false;
+  const qty = parseFloat(m[1]);
+  const u = m[2].toLowerCase();
+  const grams =
+    u === "kg" ? qty * 1000 : u === "l" ? qty * 1000 : u === "cl" ? qty * 10 : qty;
+  if (unit === "g") return grams <= value;
+  return u === "ml" || u === "cl" || u === "l" ? grams <= value : false;
+}
+
+function productClassMatches(a: VisionAnalysis, classes: string[]): boolean {
+  const hay = [
+    a.productClass ?? "",
+    a.productName ?? "",
+    a.category,
+  ]
+    .join(" ")
+    .toLowerCase();
+  return classes.some((c) => hay.includes(c));
+}
+
+/** Evaluate one ExceptionRule's condition against the analysis. */
+function exceptionMatches(ex: ExceptionRule, a: VisionAnalysis): boolean {
+  const c = ex.condition;
+  switch (c.type) {
+    case "netQuantityAtMost":
+      return netQtyAtMost(a, c.value, c.unit);
+    case "productClassIn":
+      return productClassMatches(a, c.classes);
+    case "notForRetailSale":
+      return a.notForRetailSale === true;
+    case "uspEqualsRetailPrice": {
+      const usp = a.unitSalePrice ?? "";
+      const mrp = a.mrp ?? "";
+      const u = usp.match(/₹?\s*(\d+(?:\.\d+)?)/);
+      const m = mrp.match(/₹?\s*(\d+(?:\.\d+)?)/);
+      return !!(u && m && parseFloat(u[1]) === parseFloat(m[1]));
+    }
+    case "innerPackage":
+      return a.innerPackage === true;
+    case "whenPackedDeclaration":
+      return a.whenPackedDeclaration === true;
+    default:
+      return false;
+  }
+}
+
+interface ApplicabilityOutcome {
+  def: RequirementDef;
+  applicability: Applicability;
+}
+
+/** Determine which requirements apply — KB scope, package context, exceptions. */
+function determineApplicability(a: VisionAnalysis): {
+  results: ApplicabilityOutcome[];
+  exceptionsApplied: EngineResult["exceptionsApplied"];
+} {
+  const imported = isImported(a);
+  const results: ApplicabilityOutcome[] = [];
+  const matched = new Map<string, ExceptionRule>();
+
+  for (const def of REQUIREMENTS) {
+    const scope = def.scope;
+
+    // --- scope gate --------------------------------------------------------
+    let applicable = true;
+    let reason = requirementScopeLabel(def, a);
+
+    if (scope === "imported") {
+      applicable = imported;
+      reason = imported
+        ? "Applicable — package is identified as imported (origin/importer markers)."
+        : "Not applicable — package does not present as imported (no foreign-origin declaration or importer block detected).";
+    } else if (Array.isArray(scope)) {
+      applicable = scope.includes(a.category);
+      reason = applicable
+        ? `Applicable — category "${a.category}" carries this requirement.`
+        : `Not applicable to category "${a.category}".`;
+    }
+
+    // Liquid-medium gate for drained weight (product-class based).
+    if (applicable && def.id === "rq_drained_weight") {
+      applicable = productClassMatches(a, [
+        "brine", "syrup", "oil", "juice", "pickle", "in liquid medium",
+      ]);
+      reason = applicable
+        ? "Applicable — commodity appears packed in a liquid medium."
+        : "Not applicable — no liquid-medium packing detected.";
+    }
+
+    // --- exceptions ---------------------------------------------------------
+    let exceptionApplied: Applicability["exceptionApplied"] = null;
+    if (applicable && def.exceptionIds.length > 0) {
+      for (const exId of def.exceptionIds) {
+        const ex = EXCEPTIONS.find((x) => x.id === exId);
+        if (!ex) continue;
+        if (exceptionMatches(ex, a)) {
+          if (!matched.has(ex.id)) matched.set(ex.id, ex);
+          if (ex.waives.includes(def.id)) {
+            exceptionApplied = {
+              id: ex.id,
+              name: ex.name,
+              ruleCited: ex.ruleCited,
+            };
+            applicable = false;
+            reason = `Waived by exception: ${ex.name} (${ex.ruleCited}).`;
+            break;
+          }
+        }
+      }
+    }
+
+    results.push({
+      def,
+      applicability: {
+        requirementId: def.id,
+        applicable,
+        reason,
+        scope: requirementScopeLabel(def, a),
+        exceptionApplied,
+      },
+    });
+  }
+
+  return {
+    results,
+    exceptionsApplied: [...matched.values()].map((ex) => ({
+      id: ex.id,
+      name: ex.name,
+      ruleCited: ex.ruleCited,
+      description: ex.description,
+      amendmentId: ex.amendmentId,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-requirement evaluation
+// ---------------------------------------------------------------------------
+
 function evaluateRequirement(
   def: RequirementDef,
   a: VisionAnalysis,
   fontChecks: FontCheckSummary,
 ): RequirementResult {
-  // Font-height requirements are evaluated from physical measurements.
-  if (def.id === "rq_quantity_font" || def.id === "rq_mrp_font") {
+  const base: RequirementResult = {
+    requirementId: def.id,
+    title: def.title,
+    ruleCited: def.ruleCited,
+    requirement: def.requirementText,
+    applicability: requirementScopeLabel(def, a),
+    validationMethod: def.validationMethod,
+    evidenceRequired: def.evidenceRequired,
+    amendmentId: def.amendmentId,
+    effectiveDate: def.effectiveDate,
+    versionNotes: def.versionNotes,
+    mandatory: def.mandatory,
+    status: "REVIEW",
+    confidence: 0.5,
+    source: "kb",
+  };
+
+  const amendment = AMENDMENTS[def.amendmentId];
+  const versionSuffix = amendment
+    ? `${amendment.notification}, w.e.f. ${amendment.effectiveDate}`
+    : def.effectiveDate;
+
+  // ---- Calibrated font-height requirements -------------------------------
+  if (def.validationMethod === "calibrated_measurement") {
     const m = fontChecks.measurements.find(
       (x) => x.fieldKey === def.fieldKey,
     );
     if (!fontChecks.performed || !m) {
       return {
-        requirementId: def.id,
-        title: def.title,
-        ruleCited: def.ruleCited,
-        mandatory: def.mandatory,
+        ...base,
         status: "REVIEW",
         detected: null,
         confidence: 0.5,
         reason:
-          "Character height cannot be reliably measured from the image alone — needs physical calibration (real package height) to convert pixels to millimetres.",
+          "Character height cannot be reliably measured from the image alone — physical calibration (real package height) is required to convert pixels to millimetres.",
         source: "rules",
       };
     }
     return {
-      requirementId: def.id,
-      title: def.title,
-      ruleCited: def.ruleCited,
-      mandatory: def.mandatory,
+      ...base,
       status: m.status,
       detected:
         m.actualMm != null
           ? `${m.actualMm} mm measured${m.requiredMm != null ? ` vs ≥ ${m.requiredMm} mm required` : ""}`
           : null,
       confidence: m.status === "REVIEW" ? 0.5 : 0.85,
-      reason: m.reason,
+      reason:
+        m.reason ??
+        (m.status === "PASS"
+          ? `Measured height meets the minimum (${versionSuffix}).`
+          : undefined),
       source: "rules",
     };
   }
 
+  // ---- Officer-verification items ----------------------------------------
+  if (def.validationMethod === "officer_verification") {
+    const field = fieldFor(a, def.fieldKey);
+    return {
+      ...base,
+      status: "REVIEW",
+      detected: field?.value ?? "Not assessable from the image",
+      evidence: field?.evidence ?? null,
+      boundingBox: field?.boundingBox,
+      confidence: 0.4,
+      reason:
+        "This requirement cannot be conclusively verified from a photograph — needs physical inspection (" +
+        versionSuffix +
+        ").",
+      source: "rules",
+    };
+  }
+
+  // ---- Image-backed requirements ------------------------------------------
   const field = fieldFor(a, def.fieldKey);
   const state = field?.state ?? "not_visible";
 
-  // Value confidently read → run the curated format/content check.
   if (state === "present" && field?.value) {
-    const check = def.check(field.value, a);
-    if (check.ok) {
-      return {
-        requirementId: def.id,
-        title: def.title,
-        ruleCited: def.ruleCited,
-        mandatory: def.mandatory,
-        status: "PASS",
-        detected: field.value,
-        evidence: field.evidence ?? null,
-        boundingBox: field.boundingBox,
-        confidence: Math.min(0.98, 0.6 + field.confidence * 0.35),
-        source: "image",
-      };
-    }
+    const check = validateField(def.id, field.value, a);
     return {
-      requirementId: def.id,
-      title: def.title,
-      ruleCited: def.ruleCited,
-      mandatory: def.mandatory,
-      status: "FAIL",
+      ...base,
+      status: check.ok ? "PASS" : "FAIL",
       detected: field.value,
       evidence: field.evidence ?? null,
       boundingBox: field.boundingBox,
-      confidence: Math.min(0.95, 0.55 + field.confidence * 0.35),
-      reason:
-        check.reason ??
-        `Declared value "${field.value}" does not meet the requirement.`,
+      confidence: check.ok
+        ? Math.min(0.98, 0.6 + field.confidence * 0.35)
+        : Math.min(0.95, 0.55 + field.confidence * 0.35),
+      reason: check.reason ?? undefined,
       source: "image",
     };
   }
 
-  // Not visible vs unreadable — both REVIEW, distinct reasons. Never FAIL.
+  // Absent or unreadable → REVIEW. Never FAIL.
   if (state === "unreadable") {
     return {
-      requirementId: def.id,
-      title: def.title,
-      ruleCited: def.ruleCited,
-      mandatory: def.mandatory,
+      ...base,
       status: "REVIEW",
       detected: "Visible area unclear / too low resolution",
       confidence: 0.4,
-      reason: `The ${labelForFieldKey(def.fieldKey).toLowerCase()} area is present but could not be read reliably (image quality).`,
+      reason: `The ${def.title.toLowerCase()} area is present but could not be read reliably (image quality) — insufficient evidence to conclude non-compliance.`,
       source: "image",
     };
   }
   return {
-    requirementId: def.id,
-    title: def.title,
-    ruleCited: def.ruleCited,
-    mandatory: def.mandatory,
+    ...base,
     status: "REVIEW",
     detected: "Not reliably visible in the provided image",
     confidence: 0.45,
     reason:
       a.imageQualityConfidence < 0.45
-        ? "Image quality is too poor to conclude absence — the relevant package area may simply not be in frame."
-        : "The relevant package area is not sufficiently visible; a compliant declaration may exist on another face of the pack.",
+        ? "Image quality is too poor to conclude absence — the relevant package area may simply not be in frame (insufficient evidence)."
+        : "The relevant package area is not sufficiently visible; a compliant declaration may exist on another face of the pack (insufficient evidence).",
     source: "image",
   };
 }
 
-/** Physical font-height pass (only when calibration is provided). */
+// ---------------------------------------------------------------------------
+// Calibrated font-height pass (Table I / Fourth Schedule)
+// ---------------------------------------------------------------------------
+
 export function runFontChecks(
   a: VisionAnalysis,
   calibration?: CalibrationInput,
 ): FontCheckSummary {
   if (!calibration || calibration.boundingBoxPixelHeight <= 0) {
-    return {
-      performed: false,
-      mmPerPixel: null,
-      slab: null,
-      measurements: [],
-    };
+    return { performed: false, mmPerPixel: null, slab: null, measurements: [] };
   }
-  const mmPerPixel = calibration.realHeightMm / calibration.boundingBoxPixelHeight;
-  // Slab comes from the declared net quantity when readable.
+  const mmPerPixel =
+    calibration.realHeightMm / calibration.boundingBoxPixelHeight;
   const nq = a.netQuantity ?? "";
   const m = nq.match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l|N)/i);
   const slab = resolveSlab(
@@ -209,7 +401,9 @@ export function runFontChecks(
     m ? m[2].toLowerCase() : undefined,
   );
   const slabLabel =
-    slab.maxQty === null ? "> 5 kg / 5 L" : `≤ ${slab.maxQty} ${slab.unit.split("|")[0]}`;
+    slab.maxQty === null
+      ? "> 5 kg / 5 L"
+      : `≤ ${slab.maxQty} ${slab.unit.split("|")[0]}`;
 
   const targets: Array<{ key: string; label: string }> = [
     { key: "netQuantity", label: "Net quantity" },
@@ -225,7 +419,8 @@ export function runFontChecks(
         actualMm: null,
         requiredMm: null,
         status: "REVIEW",
-        reason: "Bounding box not localized — cannot measure character height.",
+        reason:
+          "Bounding box not localized — cannot measure character height.",
       };
     }
     const pixelHeight = f.boundingBox.h;
@@ -248,7 +443,7 @@ export function runFontChecks(
       actualMm,
       requiredMm,
       status: "FAIL",
-      reason: `Measured character height ${actualMm} mm is below the Fourth Schedule minimum of ${requiredMm} mm for this slab (${slabLabel}).`,
+      reason: `Measured character height ${actualMm} mm is below the minimum of ${requiredMm} mm for this slab (${slabLabel}).`,
     };
   });
 
@@ -260,7 +455,10 @@ export function runFontChecks(
   };
 }
 
-/** Full evaluation pass. */
+// ---------------------------------------------------------------------------
+// Full evaluation pass
+// ---------------------------------------------------------------------------
+
 export function evaluate(
   a: VisionAnalysis,
   db: DatabaseLookup | null,
@@ -268,13 +466,13 @@ export function evaluate(
 ): EngineResult {
   const fontChecks = runFontChecks(a, calibration);
 
-  // ---- Barcode checksum (independent of database availability) -----------
+  // ---- Barcode checksum (independent of database availability) ------------
   const barcodeChecksumValid =
     a.barcode.value != null
       ? (a.barcode.checksumValid ?? gtinChecksumValid(a.barcode.value))
       : null;
 
-  // ---- Image ↔ database cross-check --------------------------------------
+  // ---- Image ↔ database cross-check ---------------------------------------
   const mismatches = crossCheck(a, db);
   const crossCheckSummary: CrossCheckSummary = {
     performed: !!db?.product,
@@ -294,28 +492,37 @@ export function evaluate(
             : null,
   };
 
-  const app = applicableRequirements(a);
-  const requirements = app.map(({ def }) => evaluateRequirement(def, a, fontChecks));
+  const { results: appOutcomes, exceptionsApplied } =
+    determineApplicability(a);
+  const requirements = appOutcomes.map(({ def, applicability }) => {
+    const r = evaluateRequirement(def, a, fontChecks);
+    r.applicability = applicability.reason;
+    if (applicability.exceptionApplied) {
+      r.exceptionApplied = applicability.exceptionApplied;
+    }
+    return r;
+  });
 
-  // Cross-check mismatches override the identity requirements to REVIEW
+  // Cross-check mismatches override affected identity requirements to REVIEW
   // (never auto-pick a source, never FAIL on ambiguity).
   if (mismatches.length > 0) {
     for (const r of requirements) {
       if (
         mismatches.some((m) => m.field === "brand") &&
-        r.ruleCited.includes("6(1)(c)")
+        r.requirementId === "rq_common_name"
       ) {
         r.status = "REVIEW";
         r.reason =
-          "Barcode database brand conflicts with the brand read on the package — manual verification required.";
+          "Barcode database brand conflicts with the brand read on the package — conflicting sources, manual verification required.";
         r.source = "image+database";
       }
       if (
         mismatches.some((m) => m.field === "net_quantity") &&
         r.requirementId === "rq_net_quantity"
       ) {
+        const m = mismatches.find((m) => m.field === "net_quantity");
         r.status = "REVIEW";
-        r.reason = `Package reads ${mismatches.find((m) => m.field === "net_quantity")?.imageValue} but the product database lists ${mismatches.find((m) => m.field === "net_quantity")?.databaseValue} — conflicting sources, manual verification required.`;
+        r.reason = `Package reads ${m?.imageValue} but the product database lists ${m?.databaseValue} — conflicting sources, manual verification required.`;
         r.source = "image+database";
       }
       if (
@@ -323,7 +530,8 @@ export function evaluate(
         r.requirementId === "rq_common_name"
       ) {
         r.status = "REVIEW";
-        r.reason = "Product identity on the package conflicts with the product database entry — manual verification required.";
+        r.reason =
+          "Product identity on the package conflicts with the product database entry — conflicting sources, manual verification required.";
         r.source = "image+database";
       }
     }
@@ -332,7 +540,9 @@ export function evaluate(
   const passCount = requirements.filter((r) => r.status === "PASS").length;
   const failCount = requirements.filter((r) => r.status === "FAIL").length;
   const reviewCount = requirements.filter((r) => r.status === "REVIEW").length;
-  const applicableCount = app.filter((x) => x.applicability.applicable).length;
+  const applicableCount = appOutcomes.filter(
+    (x) => x.applicability.applicable,
+  ).length;
 
   const decision: EngineResult["decision"] =
     failCount > 0 ? "FAIL" : reviewCount > 0 ? "REVIEW" : "PASS";
@@ -340,25 +550,39 @@ export function evaluate(
   const fails = requirements.filter((r) => r.status === "FAIL");
   const summarySentence =
     decision === "FAIL"
-      ? `${fails.length} mandatory requirement${fails.length > 1 ? "s" : ""} not met — e.g. ${fails
+      ? `${fails.length} clearly violated requirement${fails.length > 1 ? "s" : ""} — e.g. ${fails
           .slice(0, 2)
           .map((f) => f.title.toLowerCase())
           .join("; ")}.`
       : decision === "REVIEW"
-        ? "No clear violations, but some requirements could not be verified from this image — review recommended."
+        ? "No clear violations, but some requirements could not be verified from this image (insufficient evidence) — review recommended."
         : `All ${applicableCount} applicable requirements verified compliant on the visible evidence.`;
+
+  // Transactional / platform obligations listed for officer context.
+  const outOfScopeRequirements = RULE_RECORDS.filter(
+    (r) => r.validationMethod === "out_of_label_scope",
+  ).map((r) => ({
+    id: r.id,
+    title: r.requirementShort,
+    ruleCited: r.subRule,
+    applicability: scopeLabel(r.scope),
+  }));
 
   return {
     decision,
     requirements,
-    applicability: app.map((x) => x.applicability),
+    applicability: appOutcomes.map((x) => x.applicability),
     crossCheck: crossCheckSummary,
     fontChecks,
+    exceptionsApplied,
+    outOfScopeRequirements,
     passCount,
     failCount,
     reviewCount,
     applicableCount,
     appliedRuleVersion: RULES_VERSION,
+    kbVersion: KB_VERSION,
+    kbSources: KB_SOURCES,
     summarySentence,
   };
 }

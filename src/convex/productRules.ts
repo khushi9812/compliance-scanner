@@ -1,17 +1,22 @@
-// Legal Metrology (Packaged Commodities) Rules, 2011 — curated requirement
-// matrix ("knowledge base"). Each entry is a mandatory declaration or a
-// category-conditional requirement with its exact rule citation. The rule
-// engine evaluates an AI vision analysis against ONLY the applicable
-// requirements — nothing here is invented at runtime, and no rule is applied
-// to a product whose category does not trigger it.
+// Legal Metrology compliance data contracts + field/format validators.
 //
-// Verdict semantics (data-driven, never a bare threshold):
+// The requirement matrix itself lives in rulesKnowledgeBase.ts (versioned,
+// amendment-tracked). This module holds the analysis/result shapes the vision
+// pipeline exchanges, plus deterministic format validators keyed by rule id.
+//
+// Verdict semantics (enforced by the engine):
 //   PASS   — requirement confidently satisfied on visible evidence.
-//   FAIL   — requirement confidently violated (confidently missing, wrong
-//            format, or cross-check mismatch).
-//   REVIEW — cannot be reliably determined (unclear image, hidden panel,
-//            uncertain category, conflicting sources…). Uncertainty is NEVER
-//            converted into FAIL.
+//   FAIL   — value WAS read and is clearly non-compliant. A declaration the AI
+//            simply cannot read is NEVER a FAIL.
+//   REVIEW — insufficient evidence / uncertainty (unreadable, hidden panel,
+//            uncertain category, conflicting sources…).
+
+import {
+  RULE_RECORDS,
+  scopeLabel,
+  type RequirementScope,
+  type ValidationMethod,
+} from "./rulesKnowledgeBase";
 
 export type ProductCategory =
   | "packaged_food"
@@ -73,12 +78,20 @@ export interface VisionAnalysis {
   category: ProductCategory;
   categoryConfidence: number;
   packageType?: string | null;
+  /** Product-class note from the AI ("soap", "pan masala", "drug"…) — drives exception matching. */
+  productClass?: string | null;
+  /** Context flags the AI can see on the pack. */
+  importedPackage?: boolean | null;
+  notForRetailSale?: boolean | null;
+  whenPackedDeclaration?: boolean | null;
+  innerPackage?: boolean | null;
   manufacturer?: string | null;
   packer?: string | null;
   importer?: string | null;
   manufacturerAddress?: string | null;
   netQuantity?: string | null;
   mrp?: string | null;
+  unitSalePrice?: string | null;
   batchNumber?: string | null;
   manufactureDate?: string | null;
   bestBefore?: string | null;
@@ -103,11 +116,29 @@ export interface DatabaseLookup {
   error?: string | null;
 }
 
-/** One applicable requirement and its evaluation outcome. */
+/**
+ * One applicable requirement and its evaluation outcome. Every field the final
+ * report must show is carried here so a row is self-contained and traceable:
+ * rule reference, requirement text, applicability basis, detected value,
+ * evidence, AI confidence, validation method, verdict and reason.
+ */
 export interface RequirementResult {
   requirementId: string;
   title: string;
+  /** Exact rule citation for the applicable version, e.g. "Rule 6(1)(e)". */
   ruleCited: string;
+  /** Full requirement text of the cited version. */
+  requirement: string;
+  /** Human-readable applicability basis (scope / category / context). */
+  applicability: string;
+  /** How this requirement was validated. */
+  validationMethod: ValidationMethod;
+  /** What evidence PASS requires. */
+  evidenceRequired: string;
+  /** Amendment/version provenance of the cited requirement. */
+  amendmentId: string;
+  effectiveDate: string;
+  versionNotes: string;
   mandatory: boolean;
   status: "PASS" | "FAIL" | "REVIEW";
   /** What was detected for this requirement, if anything. */
@@ -119,20 +150,118 @@ export interface RequirementResult {
   confidence: number;
   /** Why this status — always populated for FAIL/REVIEW. */
   reason?: string;
-  source: "image" | "image+database" | "rules";
+  /** Exception that waived this requirement, when one applied. */
+  exceptionApplied?: { id: string; name: string; ruleCited: string } | null;
+  source: "image" | "image+database" | "rules" | "kb";
 }
 
 export interface Applicability {
   requirementId: string;
   applicable: boolean;
   reason: string;
+  /** Human-readable scope the requirement carries. */
+  scope?: string;
+  /** Exception that waived the requirement, when applicable. */
+  exceptionApplied?: { id: string; name: string; ruleCited: string } | null;
 }
 
 // ---------------------------------------------------------------------------
-// Requirement definitions — curated from Rule 6(1)–(2), Rule 9, Rule 2(m) and
-// the Fourth Schedule of the LM (PC) Rules, 2011, plus FSS Act labelling via
-// the FSSAI licence declaration. `appliesTo: "all"` = universal; otherwise a
-// predicate over the classified category.
+// Deterministic format validators — keyed by KB rule id. These run ONLY when
+// the AI confidently read a value (state === "present"). An unreadable or
+// absent declaration never reaches a validator, so it can never FAIL there.
+// ---------------------------------------------------------------------------
+
+export interface FieldCheckResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export function validateField(
+  id: string,
+  value: string,
+  _a: VisionAnalysis,
+): FieldCheckResult {
+  switch (id) {
+    case "rq_name_address":
+      return { ok: value.trim().length >= 4 };
+    case "rq_country_origin_imported":
+      return { ok: value.trim().length >= 3 };
+    case "rq_common_name":
+      return { ok: value.trim().length >= 2 };
+    case "rq_net_quantity": {
+      const ok = /\d/.test(value) && /(kg|g|ml|l|n|cm|m)\b/i.test(value);
+      return {
+        ok,
+        reason: ok
+          ? undefined
+          : `Net quantity "${value}" does not use a standard prescribed unit (g, kg, ml, l, N, cm, m or count).`,
+      };
+    }
+    case "rq_mrp": {
+      const ok = value.includes("₹");
+      return {
+        ok,
+        reason: ok
+          ? undefined
+          : `MRP is printed as "${value}" — under G.S.R. 779(E)/2021 the ₹ symbol is mandatory; the "Rs." style is no longer a valid declaration.`,
+      };
+    }
+    case "rq_unit_sale_price": {
+      const ok = value.includes("₹") && /(\bper\b|\/)/i.test(value);
+      return {
+        ok,
+        reason: ok
+          ? undefined
+          : `Unit sale price "${value}" must state the price with the ₹ symbol per specified unit (e.g. "₹ 0.37 per g").`,
+      };
+    }
+    case "rq_month_year": {
+      const ok = /^(0?[1-9]|1[0-2])[/\-.](\d{2}|\d{4})$/.test(value.trim());
+      return {
+        ok,
+        reason: ok
+          ? undefined
+          : `Date "${value}" is not in the prescribed Month/Year (MM/YYYY or MM/YY) form.`,
+      };
+    }
+    case "rq_consumer_care": {
+      const phone = /\+?\d[\d\s\-()]{7,}/.test(value);
+      const email = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(value);
+      if (phone && email) return { ok: true };
+      if (!phone && !email) {
+        return {
+          ok: false,
+          reason: `Consumer-care declaration "${value}" carries neither a telephone number nor an e-mail address (required form under G.S.R. 779(E)/2021).`,
+        };
+      }
+      // Partial block (phone without e-mail or vice versa): the remaining line
+      // may sit on another panel — that is REVIEW-grade, never an instant FAIL.
+      return {
+        ok: true,
+        reason: undefined,
+      };
+    }
+    case "rq_fssai": {
+      const ok = /^\d{14}$/.test(value.replace(/\D/g, ""));
+      return {
+        ok,
+        reason: ok ? undefined : `FSSAI licence "${value}" is not a 14-digit number.`,
+      };
+    }
+    case "rq_best_before":
+      return { ok: value.trim().length >= 4 };
+    case "rq_ingredients":
+      return { ok: value.trim().length >= 8 };
+    case "rq_drained_weight":
+      return { ok: value.trim().length >= 2 };
+    default:
+      return { ok: value.trim().length >= 2 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// KB-derived requirement view used by the engine and the frontend. All legal
+// text is looked up from the versioned knowledge base — never re-stated here.
 // ---------------------------------------------------------------------------
 
 export interface RequirementDef {
@@ -140,276 +269,47 @@ export interface RequirementDef {
   title: string;
   ruleCited: string;
   mandatory: boolean;
-  /** Which extracted key backs this requirement. */
   fieldKey: string;
-  appliesTo: "all" | ProductCategory[];
-  /** Extra applicability gate (e.g. importer vs manufacturer). */
-  gate?: (a: VisionAnalysis) => boolean;
-  gateReason?: string;
-  /** How a present value is judged in format/content terms. */
-  check: (value: string, a: VisionAnalysis) => { ok: boolean; reason?: string };
-  /** Human explanation of what compliant looks like. */
+  scope: RequirementScope;
+  validationMethod: ValidationMethod;
   requirementText: string;
+  evidenceRequired: string;
+  versionNotes: string;
+  amendmentId: string;
+  effectiveDate: string;
+  exceptionIds: string[];
 }
 
-const has = (v: string | null | undefined): v is string =>
-  typeof v === "string" && v.trim().length > 0;
+/**
+ * All KB records that a package scan can evaluate. Transactional / platform
+ * obligations (out_of_label_scope) are excluded from per-image evaluation but
+ * remain listed in applicability tables for officer context.
+ */
+export const REQUIREMENTS: RequirementDef[] = RULE_RECORDS.filter(
+  (r) => r.validationMethod !== "out_of_label_scope",
+).map((r) => ({
+  id: r.id,
+  title: r.requirementShort,
+  ruleCited: r.subRule,
+  mandatory: r.mandatory,
+  fieldKey: r.fieldKey,
+  scope: r.scope,
+  validationMethod: r.validationMethod,
+  requirementText: r.requirement,
+  evidenceRequired: r.evidenceRequired,
+  versionNotes: r.versionNotes,
+  amendmentId: r.amendmentId,
+  effectiveDate: r.effectiveDate,
+  exceptionIds: r.exceptionIds,
+}));
 
-/** MRP must carry ₹ (post-2021 amendment; "Rs" ceased to be valid). */
-function mrpCheck(value: string) {
-  const ok = value.includes("₹");
-  return {
-    ok,
-    reason: ok
-      ? undefined
-      : `MRP is printed as "${value}" — the ₹ symbol is mandatory; "Rs." style MRP is not a valid declaration.`,
-  };
-}
-
-function netQtyCheck(value: string) {
-  const ok = /\d/.test(value) && /(kg|g|ml|l|n)\b/i.test(value);
-  return {
-    ok,
-    reason: ok
-      ? undefined
-      : `Net quantity "${value}" does not use a standard prescribed unit (g, kg, ml, l, N).`,
-  };
-}
-
-function dateCheck(value: string) {
-  const ok = /^(0?[1-9]|1[0-2])[/\-.](\d{2}|\d{4})$/.test(value.trim());
-  return {
-    ok,
-    reason: ok
-      ? undefined
-      : `Date "${value}" is not in the prescribed Month/Year (MM/YYYY or MM/YY) form.`,
-  };
-}
-
-function phoneish(value: string) {
-  return /(\+?\d[\d\s\-()]{7,})|([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})|(www\.)/i.test(
-    value,
-  );
-}
-
-export const REQUIREMENTS: RequirementDef[] = [
-  {
-    id: "rq_name_address",
-    title: "Name and address of manufacturer / packer / importer",
-    ruleCited: "Rule 6(1)(b)",
-    mandatory: true,
-    fieldKey: "manufacturer",
-    appliesTo: "all",
-    check: (v) => ({ ok: v.trim().length >= 4 }),
-    requirementText:
-      "The pre-packed commodity must carry the name and complete address of the manufacturer, packer or importer.",
-  },
-  {
-    id: "rq_common_name",
-    title: "Generic / common name of the commodity",
-    ruleCited: "Rule 6(1)(c)",
-    mandatory: true,
-    fieldKey: "productName",
-    appliesTo: "all",
-    check: (v) => ({ ok: v.trim().length >= 2 }),
-    requirementText:
-      "The package must declare the common or generic name of the commodity it contains.",
-  },
-  {
-    id: "rq_net_quantity",
-    title: "Net quantity in prescribed units",
-    ruleCited: "Rule 6(1)(a)",
-    mandatory: true,
-    fieldKey: "netQuantity",
-    appliesTo: "all",
-    check: netQtyCheck,
-    requirementText:
-      "Net quantity must be declared in standard units (g, kg, ml, l, N) per Rule 6(1)(a).",
-  },
-  {
-    id: "rq_mrp",
-    title: "Retail sale price (MRP) with ₹ symbol",
-    ruleCited: "Rule 6(1)(e) read with Rule 2(m)",
-    mandatory: true,
-    fieldKey: "mrp",
-    appliesTo: "all",
-    check: mrpCheck,
-    requirementText:
-      "MRP must be declared inclusive of all taxes, printed with the ₹ symbol; the earlier 'Rs.' style is no longer a valid declaration.",
-  },
-  {
-    id: "rq_month_year",
-    title: "Month & year of manufacture / packing",
-    ruleCited: "Rule 6(1)(d)",
-    mandatory: true,
-    fieldKey: "manufactureDate",
-    appliesTo: "all",
-    gate: (a) => !has(a.bestBefore) || a.category === "packaged_food",
-    gateReason:
-      "A pre-printed/punch-marked date code or use-by period may substitute the printed month-year on some packs; manual verification needed.",
-    check: dateCheck,
-    requirementText:
-      "The month and year of manufacture/pre-packing must appear in MM/YYYY (or MM/YY) form.",
-  },
-  {
-    id: "rq_consumer_care",
-    title: "Consumer-care details",
-    ruleCited: "Rule 6(1)(f)",
-    mandatory: true,
-    fieldKey: "consumerCare",
-    appliesTo: "all",
-    check: (v) => ({ ok: phoneish(v) || v.trim().length >= 6 }),
-    requirementText:
-      "Consumer-care declaration (phone / email / URL / postal contact) is mandatory on all pre-packed commodities.",
-  },
-  {
-    id: "rq_country_of_origin",
-    title: "Country of origin / manufacture",
-    ruleCited: "Rule 6(1)(i)",
-    mandatory: true,
-    fieldKey: "countryOfOrigin",
-    appliesTo: "all",
-    check: (v) => ({ ok: v.trim().length >= 3 }),
-    requirementText:
-      "The country of origin or manufacture or assembly must be declared for imported packs; for Indian-made packs the maker's address satisfies identification — flag for review where ambiguous.",
-  },
-  {
-    id: "rq_best_before",
-    title: "Best before / use by date (where applicable)",
-    ruleCited: "Rule 6(1)(d) read with FSS Labelling & Display Regulation, 2020",
-    mandatory: true,
-    fieldKey: "bestBefore",
-    appliesTo: ["packaged_food", "beverage"],
-    check: (v) => ({ ok: true, reason: undefined }),
-    requirementText:
-      "Packaged food must carry 'Best before' / 'Use by' with the date or durability indication.",
-  },
-  {
-    id: "rq_fssai",
-    title: "FSSAI licence number (food products)",
-    ruleCited:
-      "FSS (Labelling & Display) Regulations, 2020 — 14-digit licence number",
-    mandatory: true,
-    fieldKey: "fssaiLicense",
-    appliesTo: ["packaged_food", "beverage"],
-    check: (v) => ({ ok: /^\d{14}$/.test(v.replace(/\D/g, "")) }),
-    requirementText:
-      "Food business operator's 14-digit FSSAI licence number must be displayed on the label.",
-  },
-  {
-    id: "rq_batch",
-    title: "Batch number or lot number",
-    ruleCited: "Rule 6(1)(c) read with Rule 9(4)",
-    mandatory: true,
-    fieldKey: "batchNumber",
-    appliesTo: "all",
-    check: (v) => ({ ok: v.trim().length >= 2 }),
-    requirementText:
-      "A batch or lot number enabling the unit to be traced must be given on the package.",
-  },
-  {
-    id: "rq_quantity_font",
-    title: "Character height of net-quantity declaration (Fourth Schedule)",
-    ruleCited: "Fourth Schedule, LM (PC) Rules, 2011",
-    mandatory: true,
-    fieldKey: "netQuantity",
-    appliesTo: "all",
-    check: (v) => ({ ok: /\d/.test(v) }),
-    requirementText:
-      "The numeral height of the net-quantity declaration must meet the Fourth Schedule slab for the package size (slabs by quantity: 1–2 mm and upward).",
-  },
-  {
-    id: "rq_mrp_font",
-    title: "Character height of MRP declaration (Fourth Schedule)",
-    ruleCited: "Fourth Schedule, LM (PC) Rules, 2011",
-    mandatory: true,
-    fieldKey: "mrp",
-    appliesTo: "all",
-    check: (v) => ({ ok: /\d/.test(v) }),
-    requirementText:
-      "MRP characters must meet the minimum height for the package's area/size slab under the Fourth Schedule.",
-  },
-  {
-    id: "rq_ingredients",
-    title: "List of ingredients (food)",
-    ruleCited: "FSS (Labelling & Display) Regulations, 2020 · Rule 6(2) context",
-    mandatory: true,
-    fieldKey: "ingredients",
-    appliesTo: ["packaged_food", "beverage"],
-    check: (v) => ({ ok: v.trim().length >= 8 }),
-    requirementText:
-      "Ingredients must be listed in descending order of weight on packaged food.",
-  },
-  {
-    id: "rq_importer_declaration",
-    title: "Importer's name & address (imported packs)",
-    ruleCited: "Rule 6(1)(b) proviso · Legal Metrology (Display of Information on Imported Packages) Rules",
-    mandatory: true,
-    fieldKey: "importer",
-    appliesTo: "all",
-    gate: (a) => {
-      const origin = (a.countryOfOrigin ?? "").toLowerCase();
-      return has(origin) && !origin.includes("india");
-    },
-    gateReason:
-      "Not applicable — package declares Indian manufacture; importer declaration applies to imported packs.",
-    check: (v) => ({ ok: v.trim().length >= 6 }),
-    requirementText:
-      "For imported packages, the name and address of the importer in India must be declared on the pack.",
-  },
-];
-
-/** Universal baseline that always applies. */
-export function baseApplicable(a: VisionAnalysis): Applicability[] {
-  return REQUIREMENTS.map((r) => ({
-    requirementId: r.id,
-    applicable: true,
-    reason: "Mandatory declaration under the cited clause.",
-  }));
-}
-
-/** Decide which requirements apply to this analysis — data-driven only. */
-export function applicableRequirements(a: VisionAnalysis): Array<{
-  def: RequirementDef;
-  applicability: Applicability;
-}> {
-  const out: Array<{ def: RequirementDef; applicability: Applicability }> = [];
-  for (const def of REQUIREMENTS) {
-    const categoryOk =
-      def.appliesTo === "all" ||
-      (def.appliesTo as ProductCategory[]).includes(a.category);
-    if (!categoryOk) {
-      out.push({
-        def,
-        applicability: {
-          requirementId: def.id,
-          applicable: false,
-          reason: `Not applicable to category "${a.category}".`,
-        },
-      });
-      continue;
-    }
-    if (def.gate && !def.gate(a)) {
-      out.push({
-        def,
-        applicability: {
-          requirementId: def.id,
-          applicable: false,
-          reason: def.gateReason ?? "Gated off by package context.",
-        },
-      });
-      continue;
-    }
-    out.push({
-      def,
-      applicability: {
-        requirementId: def.id,
-        applicable: true,
-        reason: `Applicable — category "${a.category}"${def.appliesTo !== "all" ? " + package context" : ""}.`,
-      },
-    });
+/** Requirement's applicability basis as shown in reports. */
+export function requirementScopeLabel(def: RequirementDef, a: VisionAnalysis): string {
+  const base = scopeLabel(def.scope);
+  if (Array.isArray(def.scope)) {
+    return `Applicable — category "${a.category}" (${base})`;
   }
-  return out;
+  return base;
 }
 
 /** Field lookup helper on the analysis. */
@@ -420,7 +320,7 @@ export function fieldFor(a: VisionAnalysis, key: string): ExtractedField | null 
 /**
  * Compare the image-derived identity with the database product (when a GTIN
  * lookup succeeded). Returns mismatches — never picks a winner automatically;
- * every mismatch forces the overall decision to REVIEW.
+ * every mismatch forces the affected requirement to REVIEW.
  */
 export function crossCheck(
   a: VisionAnalysis,
@@ -431,7 +331,11 @@ export function crossCheck(
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "");
   const dbTitle = db.product.title ?? "";
   const dbBrand = db.product.brand ?? "";
-  if (dbTitle && a.productName && !norm(dbTitle).includes(norm(a.productName).split(" ").slice(0, 2).join(" "))) {
+  if (
+    dbTitle &&
+    a.productName &&
+    !norm(dbTitle).includes(norm(a.productName).split(" ").slice(0, 2).join(" "))
+  ) {
     const overlaps = norm(dbTitle)
       .split(" ")
       .some((w) => w.length > 2 && norm(a.productName ?? "").includes(w));
@@ -443,7 +347,12 @@ export function crossCheck(
       });
     }
   }
-  if (dbBrand && a.brand && norm(dbBrand) !== norm(a.brand) && !norm(dbTitle).includes(norm(a.brand))) {
+  if (
+    dbBrand &&
+    a.brand &&
+    norm(dbBrand) !== norm(a.brand) &&
+    !norm(dbTitle).includes(norm(a.brand))
+  ) {
     m.push({
       field: "brand",
       imageValue: a.brand,

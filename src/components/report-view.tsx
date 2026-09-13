@@ -93,6 +93,15 @@ export function StatusChip({
 
 const pct = (n: number) => `${Math.round(n * 100)}%`;
 
+/** Human labels for the KB validation methods (requirement cards). */
+const VALIDATION_LABELS: Record<string, string> = {
+  ai_format_check: "AI format check on the read value",
+  ai_presence_with_officer: "AI presence check + officer confirmation",
+  calibrated_measurement: "Calibrated measurement (physical height needed)",
+  officer_verification: "Officer / physical verification",
+  out_of_label_scope: "Outside label scope (transactional)",
+};
+
 // ---------------------------------------------------------------------------
 // Evidence image with bounding-box overlay
 // ---------------------------------------------------------------------------
@@ -195,6 +204,7 @@ const INFO_ROWS: Array<{ key: string; emoji: string }> = [
   { key: "productName", emoji: "📦" },
   { key: "packageType", emoji: "🗄️" },
   { key: "manufacturer", emoji: "🏭" },
+  { key: "unitSalePrice", emoji: "🧮" },
   { key: "packer", emoji: "🧑‍🏭" },
   { key: "importer", emoji: "🚢" },
   { key: "manufacturerAddress", emoji: "📍" },
@@ -218,6 +228,7 @@ export function ProductInfoCard({ doc }: { doc: ScanDoc }) {
     productName: a.productName,
     packageType: a.packageType,
     manufacturer: a.manufacturer,
+    unitSalePrice: a.unitSalePrice,
     packer: a.packer,
     importer: a.importer,
     manufacturerAddress: a.manufacturerAddress,
@@ -423,6 +434,21 @@ export function ComplianceSummary({
             {r.summarySentence}
           </p>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 pt-2 text-[11px] opacity-80">
+          <span>
+            Rules KB: <b>{r.kbVersion}</b> · engine {r.appliedRuleVersion}
+          </span>
+          {r.exceptionsApplied?.length > 0 && (
+            <span>
+              Exceptions applied:{" "}
+              {r.exceptionsApplied
+                .map(
+                  (e) => `${e.name} (${e.ruleCited})`,
+                )
+                .join(" · ")}
+            </span>
+          )}
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card className="py-3">
@@ -478,11 +504,30 @@ export function RequirementCard({
           <CardTitle className="text-sm font-semibold">{req.title}</CardTitle>
           <StatusChip status={req.status} />
         </div>
-        <p className="text-xs text-muted-foreground">
-          Applicable rule: {req.ruleCited}
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="rounded bg-muted/60 px-1.5 py-0.5 font-mono">{req.ruleCited}</span>
+          <span className="rounded bg-muted/60 px-1.5 py-0.5">version: {req.amendmentId}</span>
+          <span className="rounded bg-muted/60 px-1.5 py-0.5">w.e.f. {req.effectiveDate}</span>
+        </div>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Requirement (cited version)</p>
+          <p className="leading-snug">{req.requirement}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Evidence for PASS: {req.evidenceRequired}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+          <div>
+            <p className="font-medium text-muted-foreground">Applicability</p>
+            <p>{req.applicability}</p>
+          </div>
+          <div>
+            <p className="font-medium text-muted-foreground">Validation</p>
+            <p>{VALIDATION_LABELS[req.validationMethod] ?? req.validationMethod}</p>
+          </div>
+        </div>
         <div>
           <p className="text-xs font-medium text-muted-foreground">Detected</p>
           <p className="font-medium">{req.detected ?? "Not reliably visible"}</p>
@@ -511,6 +556,17 @@ export function RequirementCard({
             </Button>
           )}
         </div>
+        {req.versionNotes && (
+          <p className="rounded-md border border-border/40 bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+            <b>Version notes:</b> {req.versionNotes}
+          </p>
+        )}
+        {req.exceptionApplied && (
+          <p className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1.5 text-[11px] text-sky-800 dark:text-sky-200">
+            <b>Exempt:</b> {req.exceptionApplied.name} ({req.exceptionApplied.ruleCited}) —
+            requirement waived, not a violation.
+          </p>
+        )}
         {req.reason && (
           <p
             className={cn(
@@ -759,6 +815,22 @@ export function AnalysisReport({
               />
             ))}
           </div>
+          {(doc.result.outOfScopeRequirements ?? []).length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">
+                  Also in the knowledge base — not testable from a label image
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1.5 text-xs text-muted-foreground">
+                {(doc.result.outOfScopeRequirements ?? []).map((o) => (
+                  <p key={o.id}>
+                    <span className="font-mono">{o.ruleCited}</span> — {o.title} ({o.applicability})
+                  </p>
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="evidence" className="mt-4 space-y-4">

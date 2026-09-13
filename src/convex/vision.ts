@@ -22,6 +22,7 @@ import {
   type ExtractedField,
   type ProductCategory,
 } from "./productRules";
+import { KB_VERSION, KB_SOURCES } from "./rulesKnowledgeBase";
 import { evaluate, type EngineResult } from "./ruleEngine";
 
 // ---------------------------------------------------------------------------
@@ -39,16 +40,22 @@ STRICT RULES:
 - "boundingBox" is in PIXELS of the provided image [x, y, w, h] around that printed declaration. Omit the box when you cannot localize it confidently.
 - Read the barcode ONLY if it is actually visible and legible; report its digits exactly. Set barcode.value null if there is no legible barcode. Do not guess digits.
 - Classify the product into exactly one category: packaged_food | beverage | personal_care | household_chemical | other.
+- "productClass" is a short free-text note on what the product IS when relevant to exemptions: "soap", "lotion", "cream", "camphor", "pan masala", "drug", "fast food", "brine", "syrup", etc. null when nothing relevant.
+- Context flags you can see: "importedPackage" (foreign origin/importer block/foreign-market markers), "notForRetailSale" (a 'NOT FOR RETAIL SALE' or wholesale marking), "whenPackedDeclaration" (a 'when packed' date basis), "innerPackage" (an inner pack inside a fully-declared outer pack). Set null when you cannot tell.
+- Read the UNIT SALE PRICE only if actually printed (e.g. "₹ 0.37 per g"); it is a separate declaration from MRP. null when absent.
 - imageQualityConfidence (0..1): your certainty that the photo captures enough of the label to make verdicts. Blur, glare, partial panels, tight crops → lower it.
 
 Respond with ONLY a JSON object of this shape:
 {
   "brand": string|null, "productName": string|null, "productVariant": string|null,
   "category": "packaged_food"|"beverage"|"personal_care"|"household_chemical"|"other",
-  "categoryConfidence": number, "packageType": string|null,
+  "categoryConfidence": number, "packageType": string|null, "productClass": string|null,
+  "importedPackage": boolean|null, "notForRetailSale": boolean|null,
+  "whenPackedDeclaration": boolean|null, "innerPackage": boolean|null,
   "manufacturer": string|null, "packer": string|null, "importer": string|null,
   "manufacturerAddress": string|null,
-  "netQuantity": string|null, "mrp": string|null, "batchNumber": string|null,
+  "netQuantity": string|null, "mrp": string|null, "unitSalePrice": string|null,
+  "batchNumber": string|null,
   "manufactureDate": string|null, "bestBefore": string|null,
   "countryOfOrigin": string|null, "consumerCare": string|null,
   "fssaiLicense": string|null, "licenseInfo": string|null,
@@ -137,7 +144,7 @@ export function parseVisionJson(
       imageQualityConfidence: 0.2,
       engine,
       notes: "parse-failure",
-    };
+    } as VisionAnalysis;
   }
 
   const warnings = Array.isArray(j.warnings)
@@ -179,12 +186,23 @@ export function parseVisionJson(
     category,
     categoryConfidence: asConfidence(j.categoryConfidence, 0.5),
     packageType: asStringOrNull(j.packageType),
+    productClass: asStringOrNull(j.productClass),
+    importedPackage:
+      typeof j.importedPackage === "boolean" ? j.importedPackage : null,
+    notForRetailSale:
+      typeof j.notForRetailSale === "boolean" ? j.notForRetailSale : null,
+    whenPackedDeclaration:
+      typeof j.whenPackedDeclaration === "boolean"
+        ? j.whenPackedDeclaration
+        : null,
+    innerPackage: typeof j.innerPackage === "boolean" ? j.innerPackage : null,
     manufacturer: asStringOrNull(j.manufacturer),
     packer: asStringOrNull(j.packer),
     importer: asStringOrNull(j.importer),
     manufacturerAddress: asStringOrNull(j.manufacturerAddress),
     netQuantity: asStringOrNull(j.netQuantity),
     mrp: asStringOrNull(j.mrp),
+    unitSalePrice: asStringOrNull(j.unitSalePrice),
     batchNumber: asStringOrNull(j.batchNumber),
     manufactureDate: asStringOrNull(j.manufactureDate),
     bestBefore: asStringOrNull(j.bestBefore),
