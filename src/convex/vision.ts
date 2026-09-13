@@ -12,6 +12,7 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { generateText } from "ai";
 import { vly } from "../lib/vly-integrations";
 import {
   gtinChecksumValid,
@@ -154,13 +155,13 @@ export function parseVisionJson(
           const key = asStringOrNull(o.key);
           if (!key) return null;
           const state = o.state === "unreadable" ? "unreadable" : "present";
-          const value = state === "present" ? asStringOrNull(o.value) : undefined;
+          const value = state === "present" ? (asStringOrNull(o.value) ?? undefined) : undefined;
           if (state === "present" && !value) return null;
           return {
             key,
             label: asStringOrNull(o.label) ?? key,
             value,
-            evidence: asStringOrNull(o.evidence),
+            evidence: asStringOrNull(o.evidence) ?? undefined,
             confidence: asConfidence(o.confidence, state === "present" ? 0.7 : 0.4),
             state,
             boundingBox: asBoundingBox(o.boundingBox),
@@ -323,41 +324,34 @@ export const analyzeAndRecord = action({
     if (args.specimenAnalysis) {
       analysis = args.specimenAnalysis as VisionAnalysis;
     } else {
-      const result = await vly.com.completion({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: VISION_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Analyze this packaged-commodity label photo and return the JSON exactly as specified.",
-              },
-              {
-                type: "image_url",
-                image_url: { url: args.imageDataUrl },
-              },
-            ],
-          },
-        ],
-        temperature: 0,
-        maxTokens: 2000,
-      });
-
-      if (!result.success || !result.data) {
+      try {
+        const result = await generateText({
+          model: vly.ai.getProvider()("gpt-4o-mini"),
+          system: VISION_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Analyze this packaged-commodity label photo and return the JSON exactly as specified.",
+                },
+                { type: "image", image: args.imageDataUrl },
+              ],
+            },
+          ],
+          temperature: 0,
+          maxOutputTokens: 2000,
+        });
+        analysis = parseVisionJson(
+          result.text ?? "",
+          "gpt-4o-mini via VLY gateway",
+        );
+      } catch (e) {
         throw new Error(
-          `Vision analysis unavailable (${result.error ?? "unknown error"}). Please try again.`,
+          `Vision analysis unavailable (${e instanceof Error ? e.message : "unknown error"}). Please try again.`,
         );
       }
-
-      const raw =
-        typeof result.data === "object" && result.data !== null && "content" in (result.data as Record<string, unknown>)
-          ? String((result.data as Record<string, unknown>).content)
-          : typeof result.data === "string"
-            ? result.data
-            : JSON.stringify(result.data);
-      analysis = parseVisionJson(raw, "gpt-4o-mini via VLY gateway");
       evidenceDataUrl = args.imageDataUrl;
     }
 
@@ -383,7 +377,7 @@ export const analyzeAndRecord = action({
     try {
       const base64 = evidenceDataUrl.split(",")[1] ?? "";
       if (base64) {
-        evidenceId = await ctx.storage.upload(
+        evidenceId = await ctx.storage.store(
           new Blob([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], {
             type: "image/jpeg",
           }),
@@ -407,7 +401,9 @@ export const analyzeAndRecord = action({
       calibration: args.calibration,
       analysis,
       database: db,
-      engineResult: engine,
+      result: engine,
+      decision: engine.decision,
+      category: analysis.category,
       officerId: userId ?? undefined,
       createdAt: now,
     });

@@ -5,7 +5,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { evaluate } from "./ruleEngine";
-import { EXAMPLE_CASES } from "./visionSpecimens";
+import { EXAMPLE_CASES } from "../lib/specimens";
 import type { VisionAnalysis, DatabaseLookup } from "./productRules";
 import type { EngineResult } from "./ruleEngine";
 import type { Id } from "./_generated/dataModel";
@@ -112,31 +112,6 @@ export const insertAnalysis = mutation({
 // Repository queries
 // ---------------------------------------------------------------------------
 
-export const scanSummary = v.object({
-  _id: v.id("scans"),
-  scanId: v.string(),
-  timestamp: v.number(),
-  portalRole: v.string(),
-  decision: v.union(
-    v.literal("PASS"),
-    v.literal("FAIL"),
-    v.literal("REVIEW"),
-  ),
-  brand: v.optional(v.string()),
-  productName: v.optional(v.string()),
-  category: v.optional(v.string()),
-  hasBarcode: v.boolean(),
-  imageUrl: v.optional(v.string()),
-  imageHash: v.string(),
-  source: v.string(),
-  state: v.optional(v.string()),
-  district: v.optional(v.string()),
-  passCount: v.number(),
-  failCount: v.number(),
-  reviewCount: v.number(),
-  applicableCount: v.number(),
-});
-
 /** Repository listing with filters (decision, role, category, search). */
 export const listScans = query({
   args: {
@@ -176,7 +151,7 @@ export const listScans = query({
             s.brand ?? "",
             s.productName ?? "",
             s.imageHash,
-            s.analysis.barcode.value ?? "",
+            s.analysis.barcode?.value ?? "",
           ]
             .join(" ")
             .toLowerCase();
@@ -193,7 +168,7 @@ export const listScans = query({
         brand: s.brand,
         productName: s.productName,
         category: s.category,
-        hasBarcode: !!(s.analysis.barcode.value ?? s.database?.product),
+        hasBarcode: !!(s.analysis.barcode?.value ?? s.database?.product),
         imageUrl: s.imageUrl,
         imageHash: s.imageHash,
         source: s.source,
@@ -367,6 +342,7 @@ export const seedExampleCases = mutation({
       const now = Date.now() - i * 36e5 * 9; // spread over recent days
       const base = imageHash.replace(/[^a-f0-9]/gi, "").slice(0, 12);
       const scanId = `SCN-${base.toUpperCase()}-${now.toString(36).toUpperCase()}`;
+
       await ctx.db.insert(
         "scans",
         scanDoc({

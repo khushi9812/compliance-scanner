@@ -1,10 +1,11 @@
-// Specimen example cases — pinned VisionAnalysis payloads that mirror the
-// printed specimen labels exactly (see src/lib/synthetic-label.ts which draws
-// PANELS). These run through the REAL rule engine so repository, analytics and
-// notices behave identically to live scans. Honest by construction: the values
-// in each analysis are exactly what is printed on the corresponding label.
+// Specimen example cases — deterministic VisionAnalysis payloads that mirror
+// the printed specimen labels exactly (see src/lib/synthetic-label.ts which
+// draws PANELS). These run through the REAL rule engine (evaluate in
+// convex/ruleEngine.ts) so repository, analytics and notices behave identically
+// to live scans. Honest by construction: every value in each analysis is
+// exactly what is printed on the corresponding specimen label.
 
-import type { VisionAnalysis, DatabaseLookup } from "./productRules";
+import type { VisionAnalysis, DatabaseLookup } from "../convex/productRules";
 
 export interface PanelLine {
   text: string;
@@ -93,7 +94,7 @@ export const PANELS: Record<string, SpecimenPanel> = {
 };
 
 /** Rough printed-text bounding boxes matching the canvas layout. */
-function lineBox(index: number, textLen: number, small = false) {
+export function lineBox(index: number, textLen: number, small = false) {
   const y = 244 + index * 56;
   return {
     x: 40,

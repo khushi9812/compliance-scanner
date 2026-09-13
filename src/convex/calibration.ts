@@ -1,9 +1,8 @@
 // Calibration engine — physical font-height validation against the Fourth
-// Schedule slabs. Mirrors calibration.py: given the real package height in mm
-// and the package's pixel height in the capture, compute mm/pixel, then
-// measure declared-field character heights in millimetres.
-
-import rules from "./rules_2011.json";
+// Schedule slabs of the Legal Metrology (PC) Rules, 2011. Given the real
+// package height in millimetres and the package's pixel height in the capture,
+// compute mm/pixel, then measure declared-field character heights in
+// millimetres and compare them with the slab minimum for the package size.
 
 export interface Slab {
   maxQty: number | null;
@@ -11,31 +10,24 @@ export interface Slab {
   minCharHeightMm: number;
 }
 
-export type FontSizeViolation = {
-  field: string;
-  actualMm: number;
-  requiredMm: number;
-  citation: string;
-};
-
 export interface CalibrationInput {
   realHeightMm: number;
   boundingBoxPixelHeight: number;
 }
 
-export interface CalibrationResult {
-  mmPerPixel: number;
-  measurements: Array<{
-    field: FontSizeViolation["field"];
-    pixelHeight: number;
-    actualMm: number;
-    requiredMm: number | null;
-    status: "pass" | "fail" | "no-slab";
-  }>;
-  violations: FontSizeViolation[];
-}
-
-const CAL = rules.calibration;
+/**
+ * Fourth Schedule numeral-height slabs by declared net quantity
+ * (Rule 6(1)(a) read with the Fourth Schedule). Slab values are configured
+ * knowledge — they are NOT invented at runtime.
+ */
+export const FOURTH_SCHEDULE_SLABS: Slab[] = [
+  { maxQty: 60, unit: "g|ml", minCharHeightMm: 1.0 },
+  { maxQty: 200, unit: "g|ml", minCharHeightMm: 2.0 },
+  { maxQty: 500, unit: "g|ml", minCharHeightMm: 3.0 },
+  { maxQty: 1000, unit: "g|ml|kg|l", minCharHeightMm: 4.0 },
+  { maxQty: 5000, unit: "g|kg|ml|l", minCharHeightMm: 6.0 },
+  { maxQty: null, unit: "g|kg|ml|l", minCharHeightMm: 8.0 },
+];
 
 /** mm per pixel = real height (mm) / package bounding-box pixel height. */
 export function mmPerPixel(input: CalibrationInput): number {
@@ -52,28 +44,24 @@ export function resolveSlab(
   packageSizeValue: number | undefined,
   packageSizeUnit: string | undefined,
 ): Slab {
-  const slabs = CAL.slabs as Slab[];
   if (packageSizeValue && packageSizeUnit) {
-    const normalized =
-      packageSizeUnit === "kg" || packageSizeUnit === "l"
-        ? { unit: packageSizeUnit, value: packageSizeValue }
-        : { unit: packageSizeUnit, value: packageSizeValue };
-    const qty = normalized.value;
-    for (const slab of slabs) {
+    const qty = packageSizeValue;
+    const unit = packageSizeUnit.toLowerCase();
+    for (const slab of FOURTH_SCHEDULE_SLABS) {
       if (slab.maxQty === null) return slab;
       const unitMatch = slab.unit
         .split("|")
         .map((u) => u.toLowerCase())
-        .includes(normalized.unit.toLowerCase());
+        .includes(unit);
       if (unitMatch && qty <= slab.maxQty) return slab;
     }
   }
-  return slabs[0];
+  return FOURTH_SCHEDULE_SLABS[0];
 }
 
 /** Slab preview for UI: all slabs with the active one highlighted. */
 export function slabsForUi(): Array<Slab & { label: string }> {
-  return (CAL.slabs as Slab[]).map((s) => ({
+  return FOURTH_SCHEDULE_SLABS.map((s) => ({
     ...s,
     label:
       s.maxQty === null

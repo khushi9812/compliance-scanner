@@ -332,7 +332,7 @@ export function evaluate(
   const passCount = requirements.filter((r) => r.status === "PASS").length;
   const failCount = requirements.filter((r) => r.status === "FAIL").length;
   const reviewCount = requirements.filter((r) => r.status === "REVIEW").length;
-  const applicableCount = app.filter((x) => x.applicable).length;
+  const applicableCount = app.filter((x) => x.applicability.applicable).length;
 
   const decision: EngineResult["decision"] =
     failCount > 0 ? "FAIL" : reviewCount > 0 ? "REVIEW" : "PASS";
