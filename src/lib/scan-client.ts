@@ -1,9 +1,10 @@
-// Client-side capture pipeline: decode/normalize captures, compute the
-// SHA-256 evidence hash (chain of custody), acquire geotags, and queue
-// officer scans offline for later sync.
+// Client-side capture pipeline for the vision pipeline: decode/normalize
+// captures, compute the SHA-256 evidence hash (chain of custody), acquire
+// geotags, attempt an on-device barcode decode (zxing — deterministic second
+// source for the barcode leg), and queue officer scans offline for later sync.
+// There is no OCR here: the image is analyzed on the server by the vision model.
 
 import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
 
 export interface PreparedCapture {
   dataUrl: string;
@@ -22,7 +23,13 @@ export async function prepareCapture(
   const dataUrl = await toDataUrl(src);
   const resized = await resizeDataUrl(dataUrl, maxDim);
   const imageHash = await sha256Hex(resized.dataUrl);
-  return { dataUrl: resized.dataUrl, width: resized.width, height: resized.height, imageHash, source };
+  return {
+    dataUrl: resized.dataUrl,
+    width: resized.width,
+    height: resized.height,
+    imageHash,
+    source,
+  };
 }
 
 function toDataUrl(src: Blob | File | string): Promise<string> {
@@ -39,7 +46,7 @@ function toDataUrl(src: Blob | File | string): Promise<string> {
         canvas.getContext("2d")!.drawImage(img, 0, 0);
         try {
           resolve(canvas.toDataURL("image/jpeg", 0.92));
-        } catch (e) {
+        } catch {
           reject(new Error("Image could not be read (cross-origin)."));
         }
       };
@@ -86,6 +93,23 @@ export async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
+/**
+ * On-device barcode decode (zxing). A deterministic companion to the vision
+ * model's own barcode reading — when it succeeds, its digits are passed to the
+ * backend as a trusted override. Returns null when no barcode is decoded.
+ */
+export async function decodeBarcode(dataUrl: string): Promise<string | null> {
+  try {
+    const { BrowserMultiFormatReader } = await import("@zxing/library");
+    const reader = new BrowserMultiFormatReader();
+    const result = await reader.decodeFromImageUrl(dataUrl);
+    const text = result.getText().replace(/\D/g, "");
+    return /^\d{6,14}$/.test(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface Geotag {
   lat?: number;
   lng?: number;
@@ -110,36 +134,29 @@ export async function acquireGeotag(): Promise<Geotag> {
 }
 
 // ---------------------------------------------------------------------------
-// Offline queue (officer field mode)
+// Offline queue (officer field mode) — payloads mirror analyzeAndRecord args
 // ---------------------------------------------------------------------------
 
-const QUEUE_KEY = "metoscan.officer.queue.v1";
+const QUEUE_KEY = "metoscan.officer.queue.v2";
+
+/** Exact argument shape of the vision action (image included for sync). */
+export interface VisionActionArgs {
+  imageDataUrl: string;
+  imageHash: string;
+  imageWidth: number;
+  imageHeight: number;
+  portalRole: "consumer" | "officer";
+  source: "upload" | "camera" | "url" | "offline_sync";
+  geolocation?: Geotag;
+  calibration?: { realHeightMm: number; boundingBoxPixelHeight: number };
+  imageUrl?: string;
+  barcodeOverride?: string;
+  specimenId?: string;
+}
 
 export interface QueuedScan {
   queuedAt: number;
-  payload: {
-    imageHash: string;
-    imageWidth: number;
-    imageHeight: number;
-    portalRole: "officer";
-    source: "upload" | "camera" | "url" | "offline_sync";
-    geolocation?: Geotag;
-    calibration?: { realHeightMm: number; boundingBoxPixelHeight: number };
-    imageUrl?: string;
-    productName?: string;
-    brand?: string;
-    packageSizeOverride?: { value: number; unit: string };
-    // Pinned example layout, if the queued capture is a specimen.
-    layoutIndex?: number;
-    // Real OCR output captured while offline; classified on sync.
-    ocrRegions?: Array<{
-      rawText: string;
-      confidence: number;
-      boundingBox: { x: number; y: number; w: number; h: number };
-    }>;
-    ocrMeta?: { primary: string; usedFallback: boolean; regionsCount: number; durationMs: number };
-  };
-  localPreview: string;
+  payload: VisionActionArgs;
 }
 
 export function loadQueue(): QueuedScan[] {
@@ -170,30 +187,9 @@ export function queueCount(): number {
   return loadQueue().length;
 }
 
-/** Push every queued scan to the backend; returns remaining count. */
+/** Push every queued scan through the vision action; returns counts. */
 export async function syncOfflineQueue(
-  processScan: (
-    args: {
-      imageHash: string;
-      imageWidth: number;
-      imageHeight: number;
-      portalRole: "officer";
-      source: "upload" | "camera" | "url" | "offline_sync";
-      geolocation?: Geotag;
-      calibration?: { realHeightMm: number; boundingBoxPixelHeight: number };
-      imageUrl?: string;
-      productName?: string;
-      brand?: string;
-      packageSizeOverride?: { value: number; unit: string };
-      layoutIndex?: number;
-      ocrRegions?: Array<{
-        rawText: string;
-        confidence: number;
-        boundingBox: { x: number; y: number; w: number; h: number };
-      }>;
-      ocrMeta?: { primary: string; usedFallback: boolean; regionsCount: number; durationMs: number };
-    },
-  ) => Promise<string>,
+  analyzeAndRecord: (args: VisionActionArgs) => Promise<string>,
 ): Promise<{ synced: number; failed: number }> {
   const queue = loadQueue();
   let synced = 0;
@@ -201,7 +197,7 @@ export async function syncOfflineQueue(
   const remaining: QueuedScan[] = [];
   for (const item of queue) {
     try {
-      await processScan(item.payload);
+      await analyzeAndRecord(item.payload);
       synced += 1;
     } catch {
       failed += 1;
@@ -212,21 +208,78 @@ export async function syncOfflineQueue(
   return { synced, failed };
 }
 
-/** Human-friendly violation summary for the plain-language card. */
+// ---------------------------------------------------------------------------
+// Labels
+// ---------------------------------------------------------------------------
+
+/** Human labels for analysis field keys (product-information card etc.). */
 export const FIELD_LABELS: Record<string, string> = {
+  brand: "Brand Name",
+  productName: "Product Name",
+  productVariant: "Variant",
+  packageType: "Package Type",
+  manufacturer: "Manufacturer",
+  packer: "Packer",
+  importer: "Importer",
+  manufacturerAddress: "Address",
+  netQuantity: "Net Quantity",
   mrp: "MRP",
-  net_quantity: "Net Quantity",
-  mfd_date: "Date of Manufacture / Packing",
-  manufacturer: "Manufacturer Details",
-  consumer_care: "Consumer Care Details",
-  country_of_origin: "Country of Origin",
+  batchNumber: "Batch / Lot No.",
+  manufactureDate: "Manufacturing / Packing Date",
+  bestBefore: "Best Before / Use By",
+  countryOfOrigin: "Country of Origin",
+  consumerCare: "Consumer Care",
+  fssaiLicense: "FSSAI Licence",
+  licenseInfo: "Licence / Registration",
+  ingredients: "Ingredients",
+  barcode: "Barcode (GTIN)",
 };
 
-export function missingFieldSentence(missing: string[]): string {
-  if (missing.length === 0) return "";
-  const labels = missing.map((m) => FIELD_LABELS[m] ?? m);
-  if (labels.length === 1) return `Missing declaration: ${labels[0]}`;
-  return `Missing declarations: ${labels.join(", ")}`;
+/** Human labels for requirement ids (notices, grievance text, chips). */
+export const REQUIREMENT_LABELS: Record<string, string> = {
+  product_identity: "Product identity",
+  brand: "Brand",
+  net_quantity: "Net quantity",
+  manufacturer: "Manufacturer",
+  rq_name_address: "Name & address of manufacturer / packer",
+  rq_common_name: "Common / generic name of the commodity",
+  rq_net_quantity: "Net quantity declaration",
+  rq_mrp: "Retail sale price (MRP)",
+  rq_month_year: "Month & year of manufacture / packing",
+  rq_consumer_care: "Consumer-care details",
+  rq_country_of_origin: "Country of origin",
+  rq_best_before: "Best before / use by date",
+  rq_fssai: "FSSAI licence number",
+  rq_batch: "Batch / lot number",
+  rq_quantity_font: "Net-quantity character height",
+  rq_mrp_font: "MRP character height",
+  rq_ingredients: "List of ingredients",
+  rq_importer_declaration: "Importer name & address",
+};
+
+export function requirementLabel(id: string): string {
+  return REQUIREMENT_LABELS[id] ?? id;
 }
 
-export type ScanDoc = Doc<"scans">;
+export type ScanDoc = {
+  _id: string;
+  scanId: string;
+  timestamp: number;
+  imageHash: string;
+  imageWidth: number;
+  imageHeight: number;
+  evidenceStorageId?: string;
+  imageUrl?: string;
+  portalRole: "consumer" | "officer";
+  source: string;
+  geolocation?: Geotag;
+  calibration?: { realHeightMm: number; boundingBoxPixelHeight: number };
+  analysis: import("@/convex/productRules").VisionAnalysis;
+  database: import("@/convex/productRules").DatabaseLookup;
+  result: import("@/convex/ruleEngine").EngineResult;
+  decision: "PASS" | "FAIL" | "REVIEW";
+  brand?: string;
+  productName?: string;
+  category: string;
+  createdAt: number;
+};

@@ -93,14 +93,38 @@ export const PANELS: Record<string, SpecimenPanel> = {
   },
 };
 
+/** Shared layout of the rendered specimen canvas (640×880). */
+export const SPEC_LAYOUT = {
+  width: 640,
+  height: 880,
+  titleBaseline: 104,
+  captionBaseline: 156,
+  lineTop: 244,
+  lineStep: 48,
+  lineH: 30,
+  smallH: 18,
+  barcodeW: 260,
+  barcodeH: 86,
+} as const;
+
 /** Rough printed-text bounding boxes matching the canvas layout. */
 export function lineBox(index: number, textLen: number, small = false) {
-  const y = 244 + index * 56;
+  const y = SPEC_LAYOUT.lineTop + index * SPEC_LAYOUT.lineStep;
   return {
     x: 40,
     y,
     w: Math.min(560, Math.max(90, textLen * (small ? 8 : 13))),
-    h: small ? 18 : 30,
+    h: small ? SPEC_LAYOUT.smallH : SPEC_LAYOUT.lineH,
+  };
+}
+
+/** Barcode block box for a panel with `lineCount` declaration lines. */
+export function barcodeBox(lineCount: number) {
+  return {
+    x: 40,
+    y: SPEC_LAYOUT.lineTop + lineCount * SPEC_LAYOUT.lineStep + 34,
+    w: SPEC_LAYOUT.barcodeW,
+    h: SPEC_LAYOUT.barcodeH,
   };
 }
 
@@ -141,7 +165,7 @@ const muesliAnalysis: VisionAnalysis = {
     { key: "consumerCare", label: "Consumer care", value: "1800-123-4567", evidence: "Consumer Care: 1800-123-4567", confidence: 0.96, state: "present", boundingBox: lineBox(7, 28) },
     { key: "countryOfOrigin", label: "Country of origin", value: "India", evidence: "Country of Origin: India", confidence: 0.95, state: "present", boundingBox: lineBox(8, 24) },
     { key: "ingredients", label: "Ingredients", value: "Oats (62%), Honey, Almonds, Raisins", evidence: "Ingredients: Oats (62%), Honey, Almonds, Raisins", confidence: 0.9, state: "present", boundingBox: lineBox(9, 48) },
-    { key: "barcode", label: "Barcode", value: "8901058000016", evidence: "EAN-13 8901058000016", confidence: 0.98, state: "present", boundingBox: { x: 40, y: 760, w: 260, h: 86 } },
+    { key: "barcode", label: "Barcode", value: "8901058000016", evidence: "EAN-13 8901058000016", confidence: 0.98, state: "present", boundingBox: barcodeBox(10) },
   ],
   otherDeclarations: ["Green vegetarian mark visible"],
   warnings: [],
@@ -182,7 +206,7 @@ const shampooAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of packing", value: "11/25", evidence: "Pkd 11/25", confidence: 0.9, state: "present", boundingBox: lineBox(2, 9) },
     { key: "manufacturer", label: "Manufacturer", value: "Greenleaf Industries", evidence: "M/s Greenleaf Industries", confidence: 0.92, state: "present", boundingBox: lineBox(3, 24) },
     { key: "consumerCare", label: "Consumer care", value: "care@example.com", evidence: "Consumer Care: care@example.com", confidence: 0.93, state: "present", boundingBox: lineBox(4, 32) },
-    { key: "barcode", label: "Barcode", value: "8901030810042", evidence: "EAN-13 8901030810042", confidence: 0.97, state: "present", boundingBox: { x: 40, y: 560, w: 260, h: 86 } },
+    { key: "barcode", label: "Barcode", value: "8901030810042", evidence: "EAN-13 8901030810042", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
   ],
   otherDeclarations: [],
   warnings: [],
@@ -223,7 +247,7 @@ const chipsAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of manufacture", value: "08/2025", evidence: "MFD 08/2025", confidence: 0.94, state: "present", boundingBox: lineBox(3, 11) },
     { key: "manufacturer", label: "Manufacturer", value: "Deccan Snacks Pvt Ltd", evidence: "Manufactured by: Deccan Snacks Pvt Ltd", confidence: 0.95, state: "present", boundingBox: lineBox(2, 39) },
     { key: "countryOfOrigin", label: "Country of origin", value: "India", evidence: "Made in India", confidence: 0.9, state: "present", boundingBox: lineBox(4, 13) },
-    { key: "barcode", label: "Barcode", value: "8901063010140", evidence: "EAN-13 8901063010140", confidence: 0.97, state: "present", boundingBox: { x: 40, y: 560, w: 260, h: 86 } },
+    { key: "barcode", label: "Barcode", value: "8901063010140", evidence: "EAN-13 8901063010140", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
   ],
   otherDeclarations: [],
   warnings: ["Back-panel declarations (FSSAI, ingredients, best-before, batch) are not in frame."],
@@ -265,7 +289,7 @@ const waterAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of packing", value: "04/2026", evidence: "Pack 04/2026", confidence: 0.9, state: "present", boundingBox: lineBox(1, 12) },
     { key: "manufacturer", label: "Marketer / packer", value: "AquaPure Beverages Ltd.", evidence: "Marketed by AquaPure Beverages Ltd.", confidence: 0.9, state: "present", boundingBox: lineBox(2, 37) },
     { key: "consumerCare", label: "Consumer care", value: "+91 9876543210", evidence: "Consumer Care: +91 9876543210", confidence: 0.94, state: "present", boundingBox: lineBox(3, 31) },
-    { key: "barcode", label: "Barcode", value: "8901058000113", evidence: "EAN-13 8901058000113", confidence: 0.97, state: "present", boundingBox: { x: 40, y: 520, w: 260, h: 86 } },
+    { key: "barcode", label: "Barcode", value: "8901058000113", evidence: "EAN-13 8901058000113", confidence: 0.97, state: "present", boundingBox: barcodeBox(4) },
   ],
   otherDeclarations: [],
   warnings: [],

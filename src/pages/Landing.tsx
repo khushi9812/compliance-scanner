@@ -112,7 +112,7 @@ export default function Landing() {
             transition={{ duration: 0.5 }}
           >
             <Badge variant="outline" className="spec-tag mb-4">
-              <Stamp className="size-3.5" /> Rule 6 · Fourth Schedule · automated
+              <Stamp className="size-3.5" /> Lens-style AI · Rule 6 · Fourth Schedule
             </Badge>
             <h1 className="text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl">
               Every pack tells the truth.
@@ -120,10 +120,11 @@ export default function Landing() {
               <span className="marker-yellow">We check the fine print.</span>
             </h1>
             <p className="mt-5 max-w-xl text-base text-muted-foreground">
-              MetroScan reads the mandatory declarations on any packaged
-              commodity — MRP, net quantity, dates, maker, consumer care,
-              origin — validates them against the Legal Metrology (Packaged
-              Commodities) Rules 2011, and stamps a verdict in seconds.
+              Point your camera like Google Lens. Our vision AI understands the
+              whole package — brand, label text, barcode, logos — reads the
+              mandatory declarations it can actually see, cross-checks the
+              barcode against product databases, and validates everything
+              against the Legal Metrology (Packaged Commodities) Rules 2011.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <Button asChild size="lg">
@@ -159,7 +160,7 @@ export default function Landing() {
                   </span>
                 </div>
                 <CardDescription className="font-mono text-[11px]">
-                  SCN-9F2A41… · score 35/100
+                  SCN-9F2A41… · 3 PASS · 2 FAIL · 1 REVIEW
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
@@ -198,8 +199,9 @@ export default function Landing() {
                   </div>
                 ))}
                 <p className="pt-1 text-xs text-muted-foreground">
-                  → One tap files a pre-filled grievance on the National
-                  Consumer Helpline.
+                  Every verdict cites its rule and shows the printed evidence it
+                  was read from — nothing is invented. Uncertain areas come
+                  back as REVIEW, never as false failures.
                 </p>
               </CardContent>
             </Card>
@@ -230,7 +232,8 @@ export default function Landing() {
             </CardHeader>
             <CardContent className="space-y-2 text-sm text-muted-foreground">
               <p>· Upload, live camera, or e-commerce image URL</p>
-              <p>· Plain-language verdict: what's missing, what's improper</p>
+              <p>· Lens-style AI reads brand, declarations &amp; barcode — no keyword OCR</p>
+              <p>· Rule-by-rule verdicts with evidence highlights &amp; confidence</p>
               <p>· One-click grievance draft for the National Consumer Helpline</p>
               <Button asChild variant="outline" className="mt-3">
                 <Link to="/scan">
@@ -252,7 +255,7 @@ export default function Landing() {
             </CardHeader>
             <CardContent className="space-y-2 text-sm text-muted-foreground">
               <p>· Geotagged, timestamped, SHA-256 evidence chain-of-custody</p>
-              <p>· Offline-first field mode with sync queue</p>
+              <p>· Barcode ↔ database cross-check flags conflicting information</p>
               <p>· Font calibration against Fourth Schedule slabs</p>
               <p>· One-click PDF / editable notice with cited clauses</p>
               <Button asChild className="mt-3">
@@ -298,8 +301,13 @@ export default function Landing() {
 
       {/* Officer feature strip */}
       <section className="mx-auto max-w-6xl px-4 py-16">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[
+            {
+              icon: <ScanLine className="size-4" />,
+              t: "Lens-style vision analysis",
+              d: "Whole-image understanding — text in any layout, logos, symbols and the barcode — with no OCR keyword matching.",
+            },
             {
               icon: <Ruler className="size-4" />,
               t: "Physical calibration",
@@ -314,6 +322,11 @@ export default function Landing() {
               icon: <FileText className="size-4" />,
               t: "Notice generator",
               d: "Legal-grade PDF and editable Word notices with evidence and citations.",
+            },
+            {
+              icon: <Database className="size-4" />,
+              t: "Barcode cross-verification",
+              d: "GTIN checksum validation and product-database lookup; conflicts force REVIEW, never guesswork.",
             },
             {
               icon: <BarChart3 className="size-4" />,
@@ -346,8 +359,9 @@ export default function Landing() {
                 Four specimen labels are waiting in the scanner
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Each one fails a different subset of Rule 6 — see the verdicts
-                for yourself.
+                Each one exercises a different part of the pipeline — from a
+                fully-compliant food panel to tiny “Rs.” print — with pinned,
+                honest ground truth.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -397,8 +411,8 @@ export default function Landing() {
             <span>MetroScan · Automated compliance for packaged commodities</span>
           </div>
           <span>
-            Rules engine v2011.04 · References to the Legal Metrology Act, 2009
-            & PC Rules, 2011 are indicative.
+            Rules engine v2 (vision) · References to the Legal Metrology Act,
+            2009 &amp; PC Rules, 2011 are indicative.
           </span>
         </div>
       </footer>

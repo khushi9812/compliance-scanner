@@ -1,57 +1,49 @@
 // Renders example label images on a canvas so every feature in the app can be
 // demonstrated offline with deterministic, honest evidence: the text drawn on
-// the canvas exactly matches the backend's pinned layout for that example.
+// the canvas is EXACTLY the panel text defined in specimens.ts (PANELS), which
+// is also what the pinned VisionAnalysis quotes. Nothing is simulated twice.
 
-import { sampleById } from "./label-samples";
+import { PANELS, SPEC_LAYOUT } from "./specimens";
 
 const PAPER = "#f5efe0";
 const INK = "#241f1c";
 const RED = "#8b1a1a";
 
-/** Declaration lines per example — mirrors pickLayout() in convex/ocr.ts. */
-const LINES: Record<string, string[]> = {
-  muesli: [
-    "Crunchy Muesli 500g",
-    "MRP Rs 185 (Inclusive of all taxes)",
-    "Net Wt. 500 g",
-    "MFD MM/YYYY 03/2026",
-    "Manufactured by Sunrise Foods Pvt. Ltd.",
-    "Customer Care: 1800-123-4567",
-  ],
-  shampoo: [
-    "HERBAL SHAMPOO",
-    "Net Qty. 340 ml",
-    "M.R.P ₹ 245.00",
-    "Pkd 11/25",
-    "M/s Greenleaf Industries",
-    "Country of Origin: India",
-    "helpline care@example.com",
-  ],
-  chips: [
-    "Masala Chips",
-    "MRP ₹ 35",
-    "NET WT 80 g",
-    "Manufactured by: Deccan Snacks Pvt Ltd",
-    "MFD 08/2025",
-    "Made in India",
-  ],
-  water: [
-    "MINERAL WATER",
-    "1 L",
-    "Rs.20/-",
-    "Pack 04/2026",
-    "Marketed by AquaPure Beverages Ltd.",
-    "Consumer Care: +91 9876543210",
-  ],
-};
+/** Draw a deterministic EAN-style bar block for the given digits. */
+function drawBarcode(
+  ctx: CanvasRenderingContext2D,
+  digits: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  ctx.fillStyle = INK;
+  const bars = 44;
+  const barW = w / (bars * 2);
+  for (let i = 0; i < bars; i++) {
+    const d = parseInt(digits[i % digits.length] ?? "0", 10);
+    const barHeight = h * 0.62 - (d % 4) * 2;
+    const bx = x + i * barW * 2;
+    if (d % 2 === 0 || d > 4) {
+      ctx.fillRect(bx, y, barW, barHeight);
+    } else {
+      ctx.fillRect(bx, y, barW * 0.6, barHeight);
+    }
+  }
+  ctx.font = "16px 'IBM Plex Mono', monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(digits, x + w / 2, y + h * 0.62 + 22);
+  ctx.textAlign = "left";
+}
 
 /** Draw a deterministic specimen label and return it as a JPEG data URL. */
 export function makeSyntheticLabel(sampleId: string): string {
-  const sample = sampleById(sampleId);
-  if (!sample) throw new Error(`Unknown sample: ${sampleId}`);
+  const panel = PANELS[sampleId];
+  if (!panel) throw new Error(`Unknown sample: ${sampleId}`);
 
-  const w = 640;
-  const h = 880;
+  const w = SPEC_LAYOUT.width;
+  const h = SPEC_LAYOUT.height;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -75,32 +67,34 @@ export function makeSyntheticLabel(sampleId: string): string {
   ctx.lineWidth = 3;
   ctx.strokeRect(14, 14, w - 28, h - 28);
 
-  // Title (first line of the panel).
-  const lines = LINES[sampleId] ?? LINES.muesli;
+  // Title + net-quantity caption.
   ctx.fillStyle = INK;
   ctx.font = "bold 40px 'IBM Plex Sans', sans-serif";
-  ctx.fillText(lines[0].toUpperCase(), 40, 104);
-
-  // Net-quantity caption under the title.
+  ctx.fillText(panel.title.toUpperCase(), 40, SPEC_LAYOUT.titleBaseline);
   ctx.font = "20px 'IBM Plex Mono', monospace";
-  const netQty =
-    sample.sizeOverride != null
-      ? `NET ${sample.sizeOverride.value} ${sample.sizeOverride.unit}`
-      : (lines[1] ?? "");
-  ctx.fillText(netQty, 40, 156);
+  ctx.fillText(panel.caption, 40, SPEC_LAYOUT.captionBaseline);
 
-  // Declaration block: drawn text == backend layout lines for this example.
-  let y = 250;
-  for (const line of lines.slice(1)) {
-    // The water example draws its non-₹ MRP in deliberately small print —
-    // it demonstrates both the ₹ violation and a Fourth-Schedule font check.
-    const isSmallPrint = sampleId === "water" && line.startsWith("Rs.");
-    ctx.font = isSmallPrint
-      ? "600 17px 'IBM Plex Sans', sans-serif"
-      : "26px 'IBM Plex Sans', sans-serif";
-    ctx.fillText(line, 40, y);
-    y += 62;
-  }
+  // Declaration block: small-flagged lines are drawn in deliberately tiny
+  // print (demonstrates the Fourth-Schedule character-height checks).
+  let y = SPEC_LAYOUT.lineTop;
+  panel.lines.forEach((line, i) => {
+    ctx.font = line.small
+      ? "600 15px 'IBM Plex Sans', sans-serif"
+      : "24px 'IBM Plex Sans', sans-serif";
+    ctx.fillText(line.text, 40, y + (line.small ? 16 : 24));
+    y += SPEC_LAYOUT.lineStep;
+    void i;
+  });
+
+  // Barcode block (bars + printed digits) — y matches barcodeBox() in
+  // specimens.ts so the pinned evidence boxes land exactly on the bars.
+  const bb = {
+    x: 40,
+    y: SPEC_LAYOUT.lineTop + panel.lines.length * SPEC_LAYOUT.lineStep + 34,
+    w: SPEC_LAYOUT.barcodeW,
+    h: SPEC_LAYOUT.barcodeH,
+  };
+  drawBarcode(ctx, panel.barcode, bb.x, bb.y, bb.w, bb.h);
 
   // Stamp footer.
   ctx.save();

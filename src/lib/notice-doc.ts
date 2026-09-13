@@ -3,7 +3,8 @@
 // consumer grievance text for the National Consumer Helpline.
 
 import type { NoticeDraft } from "@/convex/reports";
-import { FIELD_LABELS } from "./scan-client";
+import { requirementLabel } from "./scan-client";
+import type { EngineResult } from "@/convex/ruleEngine";
 
 export type { NoticeDraft };
 
@@ -32,12 +33,14 @@ export function noticeHtml(draft: NoticeDraft): string {
       (v, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td><b>${esc(v.clause)}</b>${v.field ? ` — ${esc(FIELD_LABELS[v.field] ?? v.field)}` : ""}</td>
+        <td><b>${esc(v.clause)}</b>${v.requirementId ? ` — ${esc(requirementLabel(v.requirementId))}` : ""}</td>
         <td>${esc(v.observed)}</td>
         <td>${esc(v.required)}</td>
       </tr>`,
     )
     .join("");
+
+  const tally = `Applicable requirements: ${draft.applicableCount} — ✅ PASS ${draft.passCount} · ❌ FAIL ${draft.failCount} · ⚠️ REVIEW ${draft.reviewCount}`;
 
   return `<!doctype html>
 <html>
@@ -73,10 +76,10 @@ export function noticeHtml(draft: NoticeDraft): string {
   <table class="meta">
     <tr><td>Notice No.</td><td><b>${esc(draft.noticeNo)}</b></td></tr>
     <tr><td>Generated</td><td>${fmtDate(draft.generatedAt)}</td></tr>
+    <tr><td>Scan Reference</td><td>${esc(draft.scanId)}</td></tr>
     <tr><td>To</td><td>${esc(draft.addressee)}</td></tr>
     <tr><td>Inspecting Officer</td><td>${esc(draft.officerName)}</td></tr>
-    <tr><td>Scan Reference</td><td>${esc(draft.scanDocId.slice(0, 18))}</td></tr>
-    <tr><td>Compliance Score</td><td>${draft.complianceScore}/100 (ruleset ${esc(draft.ruleVersion)})</td></tr>
+    <tr><td>Rule Evaluation</td><td>${esc(tally)} (ruleset ${esc(draft.ruleVersion)})</td></tr>
   </table>
 
   <p><b>SUBJECT:</b> ${esc(draft.subject)}</p>
@@ -88,7 +91,7 @@ export function noticeHtml(draft: NoticeDraft): string {
   <p><b>PARTICULARS OF VIOLATIONS</b></p>
   <table class="viol">
     <thead>
-      <tr><th>#</th><th>Clause cited</th><th>Observed</th><th>Required under the Rules</th></tr>
+      <tr><th>#</th><th>Clause cited</th><th>Observed on the package</th><th>Required under the Rules</th></tr>
     </thead>
     <tbody>
       ${rows || `<tr><td colspan="4">No violations recorded.</td></tr>`}
@@ -122,7 +125,7 @@ export function printNotice(draft: NoticeDraft): void {
   setTimeout(() => win.print(), 400);
 }
 
-/** Download the notice as an editable Word-compatible document. */
+/** Download the notice HTML as an editable Word-compatible document. */
 export function downloadDocx(draft: NoticeDraft): void {
   const html = noticeHtml(draft);
   const blob = new Blob(
@@ -148,11 +151,7 @@ export function grievanceText(opts: {
   scanId: string;
   productName?: string;
   brand?: string;
-  result?: {
-    missingFields: string[];
-    formattingViolations: Array<{ details: string; ruleCited: string }>;
-    complianceScore: number;
-  };
+  result?: EngineResult;
   location?: { lat?: number; lng?: number; state?: string; district?: string };
 }): string {
   const parts: string[] = [];
@@ -165,26 +164,37 @@ export function grievanceText(opts: {
     );
   }
   if (opts.result) {
-    if (opts.result.missingFields.length) {
+    const fails = opts.result.requirements.filter((r) => r.status === "FAIL");
+    if (fails.length > 0) {
       parts.push(
-        `Missing declarations: ${opts.result.missingFields
-          .map((f) => FIELD_LABELS[f] ?? f)
+        `Violations recorded: ${fails
+          .map((r) => `${r.title} (${r.ruleCited})`)
+          .join("; ")}.`,
+      );
+    }
+    const reviews = opts.result.requirements.filter(
+      (r) => r.status === "REVIEW",
+    );
+    if (reviews.length > 0) {
+      parts.push(
+        `Declarations that could not be verified from the image: ${reviews
+          .map((r) => r.title)
           .join(", ")}.`,
       );
     }
-    for (const v of opts.result.formattingViolations) {
-      parts.push(`Violation — ${v.ruleCited}: ${v.details}`);
-    }
-    parts.push(`Automated compliance score: ${opts.result.complianceScore}/100.`);
   }
   parts.push(`Evidence reference (scan ID): ${opts.scanId}.`);
   if (opts.location?.state || opts.location?.district) {
     parts.push(
-      `Purchase location: ${[opts.location.district, opts.location.state].filter(Boolean).join(", ")}.`,
+      `Purchase location: ${[opts.location.district, opts.location.state]
+        .filter(Boolean)
+        .join(", ")}.`,
     );
   }
   if (opts.location?.lat != null && opts.location?.lng != null) {
-    parts.push(`GPS: ${opts.location.lat.toFixed(5)}, ${opts.location.lng.toFixed(5)}.`);
+    parts.push(
+      `GPS: ${opts.location.lat.toFixed(5)}, ${opts.location.lng.toFixed(5)}.`,
+    );
   }
   parts.push(
     `I request the Legal Metrology department to take appropriate action under the Legal Metrology Act, 2009.`,

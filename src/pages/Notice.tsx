@@ -1,8 +1,13 @@
+// Notice page — renders the server-generated inspection notice draft for a
+// scan, with print (PDF) and Word export. Violations come from the vision
+// rule engine's mandatory FAIL results with their exact rule citations.
+
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useParams } from "react-router";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,293 +16,200 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Logo } from "@/components/Logo";
-import { FIELD_LABELS } from "@/lib/scan-client";
-import {
-  downloadDocx,
-  printNotice,
-  type NoticeDraft,
-} from "@/lib/notice-doc";
-import {
-  ArrowLeft,
-  FileDown,
-  Loader2,
-  Printer,
-  Save,
-  Gavel,
-} from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { FileDown, Gavel, Printer, Save } from "lucide-react";
+import { downloadDocx, printNotice } from "@/lib/notice-doc";
+import { requirementLabel } from "@/lib/scan-client";
+import { StatusChip } from "@/components/report-view";
 
 export default function Notice() {
-  const { scanId = "" } = useParams();
-  const navigate = useNavigate();
+  const { scanId } = useParams<{ scanId: string }>();
+
+  // Resolve the human scanId to the internal document id first.
   const scan = useQuery(
     api.scans.getScanByScanId,
     scanId ? { scanId } : "skip",
   );
+  const draft = useQuery(
+    api.reports.buildNotice,
+    scan ? { scanDocId: scan._id } : "skip",
+  );
   const saveReport = useMutation(api.reports.saveReport);
-  const [saved, setSaved] = useState(false);
 
-  if (scan === undefined) {
+  const [officerName, setOfficerName] = useState("");
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  if (!scanId || (scan && !draft)) {
     return (
-      <Centered>
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </Centered>
+      <main className="mx-auto w-full max-w-4xl px-4 py-10">
+        <Skeleton className="h-96 w-full" />
+      </main>
     );
   }
-  if (scan === null) {
+  if (!scan) {
     return (
-      <Centered>
-        <p className="text-sm text-muted-foreground">
-          Scan {scanId} not found.
-        </p>
-        <Button variant="outline" asChild className="mt-3">
-          <Link to="/dashboard">
-            <ArrowLeft className="size-4" /> Back to dashboard
-          </Link>
-        </Button>
-      </Centered>
-    );
-  }
-
-  const result = scan.result;
-  const draft: NoticeDraft = {
-    scanDocId: scan._id,
-    noticeNo: `LM/ENF/${new Date().getFullYear()}/${String(
-      (scan.timestamp % 100000) % 10000,
-    ).padStart(4, "0")}/${scan.scanId}`,
-    generatedAt: Date.now(),
-    officerName: "Inspecting Officer",
-    subject: `Notice — non-compliant packaged commodity declarations (Scan ${scan.scanId})`,
-    addressee: scan.brand
-      ? `M/s ${scan.brand}`
-      : "The Manufacturer / Packer / Importer (per panel declaration)",
-    body: [
-      `Whereas an inspection of the packaged commodity bearing scan reference ${scan.scanId} was carried out under the Legal Metrology Act, 2009 and the Legal Metrology (Packaged Commodities) Rules, 2011;`,
-      `And whereas the mandatory declarations under Rule 6(1) were found deficient — ${
-        (result?.missingFields.length ?? 0) +
-        (result?.formattingViolations.length ?? 0) +
-        (result?.fontSizeViolations.length ?? 0)
-      } violation(s) recorded with a compliance score of ${result?.complianceScore ?? 0}/100;`,
-      "And whereas you are hereby directed to show cause, within 15 days of receipt of this notice, why action should not be initiated against you for the violations listed below;",
-    ],
-    violations: [
-      ...(result?.missingFields ?? []).map((f) => ({
-        clause: "Rule 6(1) — mandatory declaration absent",
-        field: f,
-        observed: "Not declared / not detectable on the panel",
-        required: "Mandatory declaration per Rule 6(1)",
-        penaltyNote: "Legal Metrology Act, 2009 §36",
-      })),
-      ...(result?.formattingViolations ?? []).map((v) => ({
-        clause: v.ruleCited,
-        field: v.field ?? undefined,
-        observed: v.details,
-        required: "Format per Rule 6",
-        penaltyNote: "Legal Metrology Act, 2009 §36",
-      })),
-      ...(result?.fontSizeViolations ?? []).map((v) => ({
-        clause: v.citation,
-        field: v.field,
-        observed: `Character height ${v.actualMm} mm`,
-        required: `Minimum ${v.requiredMm} mm (Fourth Schedule slab)`,
-        penaltyNote: "Legal Metrology Act, 2009 §36",
-      })),
-    ],
-    evidence: [
-      {
-        label: "Label capture (full panel)",
-        imageHash: scan.imageHash,
-        imageUrl: scan.imageUrl,
-      },
-    ],
-    complianceScore: result?.complianceScore ?? 0,
-    ruleVersion: result?.appliedRuleVersion ?? "2011.04.fourth-schedule",
-  };
-
-  async function handleSave() {
-    try {
-      await saveReport({
-        scanDocId: draft.scanDocId as never,
-        noticeNo: draft.noticeNo,
-        officerName: draft.officerName,
-        violationCount: draft.violations.length,
-      });
-      setSaved(true);
-      toast.success("Report filed to the case repository.");
-    } catch {
-      toast.error("Could not file the report.");
-    }
-  }
-
-  return (
-    <div className="min-h-screen bg-background">
-      <header className="no-print sticky top-0 z-20 border-b bg-card/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
-          <Link to="/dashboard" className="flex items-center gap-2 text-sm">
-            <Logo className="size-7" />
-            <span className="font-semibold">Notice Generator</span>
-          </Link>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => printNotice(draft)}>
-              <Printer className="size-4" /> Print / PDF
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => downloadDocx(draft)}>
-              <FileDown className="size-4" /> Editable document
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void handleSave()}
-              disabled={saved}
-            >
-              <Save className="size-4" /> {saved ? "Filed" : "File report"}
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl px-4 py-8">
-        <Card className="mb-5 no-print">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Gavel className="size-4 text-primary" /> Automated Digital Notice
-            </CardTitle>
-            <CardDescription>
-              Rendered from scan evidence with cited clauses, confidence data,
-              and chain-of-custody hash. Export as PDF (print) or an editable
-              Word document.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="outline" className="spec-tag">
-              {draft.violations.length} violation(s)
-            </Badge>
-            <Badge variant="outline" className="spec-tag">
-              Score {draft.complianceScore}/100
-            </Badge>
-            <Badge variant="outline" className="spec-tag font-mono">
-              ruleset {draft.ruleVersion}
-            </Badge>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="size-4" /> Back
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* Paper preview of the notice */}
-        <Card className="receipt-paper mx-auto max-w-3xl">
-          <CardContent className="space-y-5 p-6 sm:p-10">
-            <div className="text-center">
-              <p className="text-lg font-bold uppercase tracking-[0.2em]">
-                Legal Metrology — Inspection Notice
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Under the Legal Metrology Act, 2009 and the Legal Metrology
-                (Packaged Commodities) Rules, 2011
-              </p>
-              <div className="mx-auto mt-3 h-0.5 w-40 bg-foreground/70" style={{ borderTop: "3px double var(--foreground)" }} />
-            </div>
-
-            <div className="grid grid-cols-[10rem_1fr] gap-y-1.5 text-sm">
-              <span className="text-muted-foreground">Notice No.</span>
-              <span className="font-mono font-semibold">{draft.noticeNo}</span>
-              <span className="text-muted-foreground">To</span>
-              <span>{draft.addressee}</span>
-              <span className="text-muted-foreground">Inspecting Officer</span>
-              <span>{draft.officerName}</span>
-              <span className="text-muted-foreground">Compliance score</span>
-              <span className="font-mono">{draft.complianceScore}/100</span>
-            </div>
-
-            <div>
-              <p className="text-sm font-semibold">SUBJECT</p>
-              <p className="text-sm">{draft.subject}</p>
-            </div>
-
-            <ol className="list-decimal space-y-2 pl-6 text-sm">
-              {draft.body.map((p, i) => (
-                <li key={i}>{p}</li>
-              ))}
-            </ol>
-
-            <div>
-              <p className="mb-2 text-sm font-semibold">
-                PARTICULARS OF VIOLATIONS
-              </p>
-              <div className="overflow-x-auto rounded-md border">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-muted/60 text-[10px] uppercase tracking-wide">
-                    <tr>
-                      <th className="px-3 py-2">#</th>
-                      <th className="px-3 py-2">Clause cited</th>
-                      <th className="px-3 py-2">Observed</th>
-                      <th className="px-3 py-2">Required</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {draft.violations.map((v, i) => (
-                      <tr key={i} className="border-t">
-                        <td className="px-3 py-2 font-mono">{i + 1}</td>
-                        <td className="px-3 py-2">
-                          <span className="font-medium">{v.clause}</span>
-                          {v.field && (
-                            <span className="block text-muted-foreground">
-                              {FIELD_LABELS[v.field] ?? v.field}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">{v.observed}</td>
-                        <td className="px-3 py-2">{v.required}</td>
-                      </tr>
-                    ))}
-                    {draft.violations.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                          No violations recorded.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="evidence-frame rounded-md p-4 text-xs">
-              <p className="font-semibold">EVIDENCE</p>
-              <p className="mt-1 break-all font-mono">
-                SHA-256: {draft.evidence[0]?.imageHash}
-              </p>
-              <p className="text-muted-foreground">{draft.evidence[0]?.label}</p>
-            </div>
-
-            <div className="pt-6 text-right">
-              <div className="ml-auto w-fit border-t border-foreground pt-2 text-sm">
-                <p className="font-semibold">{draft.officerName}</p>
-                <p className="text-xs text-muted-foreground">
-                  Inspecting Officer, Legal Metrology
-                </p>
-                <p className="stamp mt-3 text-[10px] text-red-800">
-                  ISSUED VIA METROSCAN
-                </p>
-              </div>
-            </div>
+      <main className="mx-auto w-full max-w-4xl px-4 py-10">
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            Loading scan {scanId}…
           </CardContent>
         </Card>
       </main>
-    </div>
-  );
-}
+    );
+  }
 
-function Centered({ children }: { children: React.ReactNode }) {
+  const onSave = async () => {
+    if (!draft) return;
+    try {
+      const id = await saveReport({
+        scanDocId: draft.scanDocId as never,
+        noticeNo: draft.noticeNo,
+        officerName: officerName || draft.officerName,
+        violationCount: draft.violations.length,
+      });
+      setSavedId(id);
+      toast.success(`Report saved (${id}).`);
+    } catch {
+      toast.error("Could not save the report.");
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      {children}
-    </div>
+    <main className="mx-auto w-full max-w-4xl px-4 py-8">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+            <Gavel className="h-6 w-6 text-primary" />
+            Inspection Notice
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Drafted from the evidence-anchored rule evaluation of scan{" "}
+            <span className="font-mono">{scanId}</span>
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => draft && printNotice(draft)} disabled={!draft}>
+            <Printer className="mr-2 h-4 w-4" /> Print / PDF
+          </Button>
+          <Button variant="outline" onClick={() => draft && downloadDocx(draft)} disabled={!draft}>
+            <FileDown className="mr-2 h-4 w-4" /> Word
+          </Button>
+          <Button onClick={() => void onSave()} disabled={!draft}>
+            <Save className="mr-2 h-4 w-4" /> Save report
+          </Button>
+        </div>
+      </header>
+
+      {draft && (
+        <>
+          <Card className="mb-5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Rule evaluation summary</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-3 text-sm">
+              <Badge variant="secondary">{draft.applicableCount} applicable</Badge>
+              <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                ✅ {draft.passCount} PASS
+              </Badge>
+              <Badge variant="destructive">❌ {draft.failCount} FAIL</Badge>
+              <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                ⚠️ {draft.reviewCount} REVIEW
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                ruleset {draft.ruleVersion}
+              </span>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">{draft.noticeNo}</CardTitle>
+              <CardDescription>
+                {new Date(draft.generatedAt).toLocaleString("en-IN")} · To:{" "}
+                {draft.addressee}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm">
+              <p className="font-semibold">{draft.subject}</p>
+              <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed">
+                {draft.body.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ol>
+
+              <div>
+                <p className="mb-2 font-semibold">Particulars of violations</p>
+                {draft.violations.length === 0 ? (
+                  <p className="rounded-md border border-border/60 bg-muted/30 px-3 py-4 text-center text-muted-foreground">
+                    No mandatory violations recorded — a notice may not be warranted.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {draft.violations.map((v, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg border border-red-500/30 bg-red-500/5 p-3"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusChip status="FAIL" />
+                          <span className="text-sm font-semibold">
+                            {requirementLabel(v.requirementId ?? "")}
+                          </span>
+                          <Badge variant="outline" className="font-mono text-[10px]">
+                            {v.clause}
+                          </Badge>
+                        </div>
+                        <p className="mt-1.5 text-xs">
+                          <b>Observed:</b> {v.observed}
+                        </p>
+                        <p className="text-xs">
+                          <b>Required:</b> {v.required}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">{v.penaltyNote}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs">
+                <p className="font-semibold">Evidence</p>
+                <p className="mt-1">
+                  {draft.evidence[0]?.label} · SHA-256{" "}
+                  <span className="font-mono">{draft.evidence[0]?.imageHash.slice(0, 24)}…</span>
+                </p>
+                {draft.evidence[0]?.imageUrl && (
+                  <a
+                    className="mt-1 inline-block text-primary underline"
+                    href={draft.evidence[0].imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View stored capture
+                  </a>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3 border-t border-border/50 pt-4">
+                <div className="flex-1">
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">
+                    Officer name override (optional)
+                  </p>
+                  <Input
+                    placeholder={draft.officerName}
+                    value={officerName}
+                    onChange={(e) => setOfficerName(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {savedId ? `Saved as ${savedId}` : "Not yet saved to the repository"}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </main>
   );
 }
