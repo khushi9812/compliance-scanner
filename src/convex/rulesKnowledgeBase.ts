@@ -173,6 +173,12 @@ export interface ExceptionRule {
   waives: string[];
   /** Requirement ids that remain applicable despite the exemption. */
   keeps: string[];
+  /**
+   * Proviso: another exception that REMOVES this one's benefit. E.g. the
+   * G.S.R. 881(E)/2025 proviso — Rule 26(a) shall not apply to pan masala —
+   * means the small-package exemption is blocked when pan masala applies.
+   */
+  blockedByException?: string;
   amendmentId: string;
 }
 
@@ -182,10 +188,11 @@ export const EXCEPTIONS: ExceptionRule[] = [
     name: "Small-package exemption (≤ 10 g / ≤ 10 ml)",
     ruleCited: "Rule 26(a)",
     description:
-      "Packages containing 10 g or less / 10 ml or less are exempt from specified retail declarations under Rule 26. The unit sale price is not required on retail packs of 10 g / 10 ml or less (Department of Consumer Affairs FAQ).",
+      "Packages containing 10 g or less / 10 ml or less are exempt from specified retail declarations under Rule 26. The unit sale price is not required on retail packs of 10 g / 10 ml or less (Department of Consumer Affairs FAQ). Blocked for pan masala by the G.S.R. 881(E)/2025 proviso.",
     condition: { type: "netQuantityAtMost", value: 10, unit: "g" },
     waives: ["rq_unit_sale_price"],
     keeps: ["rq_name_address", "rq_common_name", "rq_net_quantity", "rq_mrp"],
+    blockedByException: "ex_pan_masala_rule26a",
     amendmentId: "am2011_principal",
   },
   {
@@ -193,10 +200,11 @@ export const EXCEPTIONS: ExceptionRule[] = [
     name: "Small-package exemption (≤ 10 ml)",
     ruleCited: "Rule 26(a)",
     description:
-      "Same exemption as ex_rule26_small_pack applied on volume — packs of 10 ml or less.",
+      "Same exemption as ex_rule26_small_pack applied on volume — packs of 10 ml or less. Blocked for pan masala by the G.S.R. 881(E)/2025 proviso.",
     condition: { type: "netQuantityAtMost", value: 10, unit: "ml" },
     waives: ["rq_unit_sale_price"],
     keeps: ["rq_name_address", "rq_common_name", "rq_net_quantity", "rq_mrp"],
+    blockedByException: "ex_pan_masala_rule26a",
     amendmentId: "am2011_principal",
   },
   {
@@ -476,7 +484,7 @@ export const RULE_RECORDS: RuleRecord[] = [
       "The month and year of manufacture must be declared. (The earlier alternative of month & year of pre-packing or import was removed by the 2021 amendment — a single manufacture-date basis now applies.)",
     requirementShort: "Month & year of manufacture",
     scope: "all",
-    exceptionIds: ["ex_when_packed_soaps"],
+    exceptionIds: ["ex_when_packed_soaps", "ex_drugs_cosmetics"],
     validationMethod: "ai_format_check",
     evidenceRequired: "Printed date in MM/YYYY or MM/YY (or permitted 'when packed' basis).",
     governingRegulation: "Legal Metrology (PC) Rules, 2011",
@@ -497,7 +505,7 @@ export const RULE_RECORDS: RuleRecord[] = [
     scope: ["packaged_food", "beverage", "personal_care"],
     applicabilityNote:
       "Applies to commodities with limited shelf life (foods, beverages, cosmetics). For other categories shelf-life relevance cannot be determined from the image alone.",
-    exceptionIds: [],
+    exceptionIds: ["ex_drugs_cosmetics"],
     validationMethod: "ai_presence_with_officer",
     evidenceRequired: "Printed 'Best before …' / 'Use by …' with month and year.",
     governingRegulation: "Legal Metrology (PC) Rules, 2011 (food labelling read with FSS (Labelling & Display) Regulations, 2020)",
@@ -516,7 +524,7 @@ export const RULE_RECORDS: RuleRecord[] = [
       "Consumer-care details must be declared: the name, address, telephone number and e-mail address of the person or office who can be contacted in case of consumer complaints.",
     requirementShort: "Consumer-care details (incl. telephone & e-mail)",
     scope: "all",
-    exceptionIds: [],
+    exceptionIds: ["ex_drugs_cosmetics"],
     validationMethod: "ai_format_check",
     evidenceRequired:
       "Printed consumer-care block; the 2021 form requires a telephone number and e-mail address.",
@@ -720,7 +728,7 @@ export const RULE_RECORDS: RuleRecord[] = [
       "Food products must display the FBO's 14-digit FSSAI licence number and logo. (Not an LM-PC requirement — checked because it is label-adjacent and often confused with Rule 6 declarations.)",
     requirementShort: "FSSAI licence number (food products)",
     scope: ["packaged_food", "beverage"],
-    exceptionIds: [],
+    exceptionIds: ["ex_drugs_cosmetics"],
     validationMethod: "ai_format_check",
     evidenceRequired: "Printed 14-digit licence number with FSSAI logo/marking.",
     governingRegulation: "FSS (Labelling & Display) Regulations, 2020 (FSSAI)",
@@ -739,7 +747,7 @@ export const RULE_RECORDS: RuleRecord[] = [
       "Packaged food must carry a list of ingredients in descending order of weight. (Not an LM-PC requirement — surfaced for completeness.)",
     requirementShort: "List of ingredients (food)",
     scope: ["packaged_food", "beverage"],
-    exceptionIds: [],
+    exceptionIds: ["ex_drugs_cosmetics"],
     validationMethod: "ai_presence_with_officer",
     evidenceRequired: "Printed ingredient list with descending-order wording.",
     governingRegulation: "FSS (Labelling & Display) Regulations, 2020 (FSSAI)",

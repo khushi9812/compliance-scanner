@@ -67,7 +67,7 @@ export const PANELS: Record<string, SpecimenPanel> = {
       { text: "M/s Greenleaf Industries" },
       { text: "Consumer Care: care@example.com" },
     ],
-    barcode: "8901030810042",
+    barcode: "8901030810046",
   },
   chips: {
     title: "Masala Chips",
@@ -79,7 +79,7 @@ export const PANELS: Record<string, SpecimenPanel> = {
       { text: "MFD 08/2025" },
       { text: "Made in India" },
     ],
-    barcode: "8901063010140",
+    barcode: "8901063010147",
   },
   water: {
     title: "MINERAL WATER",
@@ -90,14 +90,14 @@ export const PANELS: Record<string, SpecimenPanel> = {
       { text: "Marketed by AquaPure Beverages Ltd." },
       { text: "Consumer Care: +91 9876543210" },
     ],
-    barcode: "8901058000113",
+    barcode: "8901058000115",
   },
 };
 
-/** Shared layout of the rendered specimen canvas (640×880). */
+/** Shared layout of the rendered specimen canvas (640×940). */
 export const SPEC_LAYOUT = {
   width: 640,
-  height: 880,
+  height: 940,
   titleBaseline: 104,
   captionBaseline: 156,
   lineTop: 244,
@@ -196,7 +196,7 @@ const shampooAnalysis: VisionAnalysis = {
   fssaiLicense: null,
   ingredients: null,
   barcode: {
-    value: "8901030810042",
+    value: "8901030810046",
     symbology: "EAN-13",
     checksumValid: true,
     prefixRegion: "India",
@@ -209,7 +209,7 @@ const shampooAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of packing", value: "11/25", evidence: "Pkd 11/25", confidence: 0.9, state: "present", boundingBox: lineBox(2, 9) },
     { key: "manufacturer", label: "Manufacturer", value: "Greenleaf Industries", evidence: "M/s Greenleaf Industries", confidence: 0.92, state: "present", boundingBox: lineBox(3, 24) },
     { key: "consumerCare", label: "Consumer care", value: "care@example.com", evidence: "Consumer Care: care@example.com", confidence: 0.93, state: "present", boundingBox: lineBox(4, 32) },
-    { key: "barcode", label: "Barcode", value: "8901030810042", evidence: "EAN-13 8901030810042", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
+    { key: "barcode", label: "Barcode", value: "8901030810046", evidence: "EAN-13 8901030810046", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
   ],
   otherDeclarations: [],
   warnings: [],
@@ -237,7 +237,7 @@ const chipsAnalysis: VisionAnalysis = {
   fssaiLicense: null,
   ingredients: null,
   barcode: {
-    value: "8901063010140",
+    value: "8901063010147",
     symbology: "EAN-13",
     checksumValid: true,
     prefixRegion: "India",
@@ -250,7 +250,7 @@ const chipsAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of manufacture", value: "08/2025", evidence: "MFD 08/2025", confidence: 0.94, state: "present", boundingBox: lineBox(3, 11) },
     { key: "manufacturer", label: "Manufacturer", value: "Deccan Snacks Pvt Ltd", evidence: "Manufactured by: Deccan Snacks Pvt Ltd", confidence: 0.95, state: "present", boundingBox: lineBox(2, 39) },
     { key: "countryOfOrigin", label: "Country of origin", value: "India", evidence: "Made in India", confidence: 0.9, state: "present", boundingBox: lineBox(4, 13) },
-    { key: "barcode", label: "Barcode", value: "8901063010140", evidence: "EAN-13 8901063010140", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
+    { key: "barcode", label: "Barcode", value: "8901063010147", evidence: "EAN-13 8901063010147", confidence: 0.97, state: "present", boundingBox: barcodeBox(5) },
   ],
   otherDeclarations: [],
   warnings: ["Back-panel declarations (FSSAI, ingredients, best-before, batch) are not in frame."],
@@ -280,7 +280,7 @@ const waterAnalysis: VisionAnalysis = {
   fssaiLicense: null,
   ingredients: null,
   barcode: {
-    value: "8901058000113",
+    value: "8901058000115",
     symbology: "EAN-13",
     checksumValid: true,
     prefixRegion: "India",
@@ -292,7 +292,7 @@ const waterAnalysis: VisionAnalysis = {
     { key: "manufactureDate", label: "Month & year of packing", value: "04/2026", evidence: "Pack 04/2026", confidence: 0.9, state: "present", boundingBox: lineBox(1, 12) },
     { key: "manufacturer", label: "Marketer / packer", value: "AquaPure Beverages Ltd.", evidence: "Marketed by AquaPure Beverages Ltd.", confidence: 0.9, state: "present", boundingBox: lineBox(2, 37) },
     { key: "consumerCare", label: "Consumer care", value: "+91 9876543210", evidence: "Consumer Care: +91 9876543210", confidence: 0.94, state: "present", boundingBox: lineBox(3, 31) },
-    { key: "barcode", label: "Barcode", value: "8901058000113", evidence: "EAN-13 8901058000113", confidence: 0.97, state: "present", boundingBox: barcodeBox(4) },
+    { key: "barcode", label: "Barcode", value: "8901058000115", evidence: "EAN-13 8901058000115", confidence: 0.97, state: "present", boundingBox: barcodeBox(4) },
   ],
   otherDeclarations: [],
   warnings: [],
@@ -314,10 +314,12 @@ const muesliDb: DatabaseLookup = {
 
 const shampooDb: DatabaseLookup = {
   product: {
+    // Wrong-GTIN demo scenario: the barcode resolves to a different
+    // registered product — package brand conflicts with the database brand.
     source: "UPCitemdb",
     found: true,
-    title: "Greenleaf Herbal Shampoo 340ml",
-    brand: "Herbal Essence Ltd.",
+    title: "Purity Herbal Shampoo 340ml",
+    brand: "Purity Botanicals Ltd.",
     category: "Personal Care",
     netWeight: "340 ml",
   },

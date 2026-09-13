@@ -160,7 +160,9 @@ function exceptionMatches(ex: ExceptionRule, a: VisionAnalysis): boolean {
     case "innerPackage":
       return a.innerPackage === true;
     case "whenPackedDeclaration":
-      return a.whenPackedDeclaration === true;
+      // A 'when packed' date basis is permitted only for the listed product
+      // classes (soaps, lotions, creams, camphor — DCA FAQ), not broadly.
+      return a.whenPackedDeclaration === true && productClassMatches(a, c.classes);
     default:
       return false;
   }
@@ -216,6 +218,19 @@ function determineApplicability(a: VisionAnalysis): {
         const ex = EXCEPTIONS.find((x) => x.id === exId);
         if (!ex) continue;
         if (exceptionMatches(ex, a)) {
+          // Proviso check: another exception may REMOVE this one's benefit
+          // (e.g. G.S.R. 881(E)/2025 — Rule 26(a) shall not apply to pan
+          // masala). When the blocking exception's condition also matches,
+          // the waiver does not fire; the requirement stays applicable.
+          const blocked =
+            ex.blockedByException != null
+              ? EXCEPTIONS.find((b) => b.id === ex.blockedByException)
+              : undefined;
+          if (blocked && exceptionMatches(blocked, a)) {
+            if (!matched.has(blocked.id)) matched.set(blocked.id, blocked);
+            reason = `Exception ${ex.name} (${ex.ruleCited}) would apply, but is blocked by ${blocked.name} (${blocked.ruleCited}) — requirement remains applicable.`;
+            continue;
+          }
           if (!matched.has(ex.id)) matched.set(ex.id, ex);
           if (ex.waives.includes(def.id)) {
             exceptionApplied = {
@@ -494,14 +509,19 @@ export function evaluate(
 
   const { results: appOutcomes, exceptionsApplied } =
     determineApplicability(a);
-  const requirements = appOutcomes.map(({ def, applicability }) => {
-    const r = evaluateRequirement(def, a, fontChecks);
-    r.applicability = applicability.reason;
-    if (applicability.exceptionApplied) {
-      r.exceptionApplied = applicability.exceptionApplied;
-    }
-    return r;
-  });
+  // Only APPLICABLE requirements are evaluated into report rows —
+  // non-applicable and exception-waived requirements are recorded in the
+  // applicability table (with their reason) but never counted or verdicted.
+  const requirements = appOutcomes
+    .filter(({ applicability }) => applicability.applicable)
+    .map(({ def, applicability }) => {
+      const r = evaluateRequirement(def, a, fontChecks);
+      r.applicability = applicability.reason;
+      if (applicability.exceptionApplied) {
+        r.exceptionApplied = applicability.exceptionApplied;
+      }
+      return r;
+    });
 
   // Cross-check mismatches override affected identity requirements to REVIEW
   // (never auto-pick a source, never FAIL on ambiguity).
